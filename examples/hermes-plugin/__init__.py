@@ -1521,8 +1521,14 @@ class OpenVikingMemoryProvider(MemoryProvider):
         """Client from the published snapshot (one tuple load: background writers run
         without _client_refresh_lock and must not see torn fields); falls back to the
         raw fields for legacy/hand-wired paths with no snapshot."""
-        endpoint, api_key, account, user, agent = self._conn_snapshot or self._settings_tuple()
-        return _VikingClient(endpoint, api_key, account=account, user=user, agent=agent)
+        snapshot = self._conn_snapshot
+        endpoint, api_key, account, user, agent = snapshot or self._settings_tuple()
+        client = _VikingClient(endpoint, api_key, account=account, user=user, agent=agent)
+        # Stamp the client with the snapshot it was actually built from, so
+        # _user_space() can key/publish its identity cache against the
+        # connection this specific client speaks for, even after a reload.
+        client._conn_snapshot = snapshot
+        return client
 
     # -- prompt / prefetch ---------------------------------------------------
 
@@ -1818,12 +1824,19 @@ class OpenVikingMemoryProvider(MemoryProvider):
         getattr() throughout: hand-wired providers (``__new__``) may lack these fields.
         """
         active = client if client is not None else getattr(self, "_client", None)
-        snapshot = getattr(self, "_conn_snapshot", None)
+        if client is not None and hasattr(client, "_conn_snapshot"):
+            snapshot = client._conn_snapshot
+        else:
+            snapshot = getattr(self, "_conn_snapshot", None)
         cached = getattr(self, "_user_space_cache", None)
         if active is not None and cached is not None and cached[0] == snapshot:
             return cached[1]
         if active is not None and (resolved := _resolve_user_space(active, timeout=timeout)):
-            if snapshot is not None and snapshot is getattr(self, "_conn_snapshot", None):  # unchanged under us
+            if client is not None and hasattr(client, "_conn_snapshot"):
+                current_snapshot = client._conn_snapshot
+            else:
+                current_snapshot = getattr(self, "_conn_snapshot", None)
+            if snapshot is not None and snapshot is current_snapshot:
                 self._user_space_cache = (snapshot, resolved)
             return resolved
         return str(getattr(active, "_user", "") or getattr(self, "_user", "") or "default").strip() or "default"
