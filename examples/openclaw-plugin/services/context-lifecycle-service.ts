@@ -884,9 +884,18 @@ export async function afterTurnOpenVikingSession({
       messages: newMsgFull,
     });
 
+    const senderRoleId = toRoleId(sender.senderId);
+    if (advancementKey && cfg.peer_role === "sender" && !senderRoleId &&
+        extractedMessages.some((message) => message.role === "user")) {
+      // Do not acknowledge a turn under the wrong memory owner. The host must
+      // supply trusted sender context on delivery (including outbox retries).
+      throw new Error(
+        "openviking: peer_role=sender requires a trusted sender identity in commitTurn; " +
+        "this host did not supply one, so the turn remains pending",
+      );
+    }
     const client = await getClient();
     const createdAt = pickLatestCreatedAt(turnMessages);
-    const senderRoleId = toRoleId(sender.senderId);
     const captured: Parameters<OpenVikingClient["addSessionTurn"]>[2] = [];
     let status: "committed" | "duplicate" = "committed";
     for (const msg of extractedMessages) {

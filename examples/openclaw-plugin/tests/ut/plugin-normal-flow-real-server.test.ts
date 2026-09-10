@@ -182,6 +182,7 @@ describe("plugin normal flow with healthy backend", () => {
     let contextEngineFactory: (() => unknown) | null = null;
 
     plugin.register({
+      runtime: { version: "2026.5.27" },
       logger: {
         debug: () => {},
         error: () => {},

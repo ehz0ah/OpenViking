@@ -247,10 +247,22 @@ function validTokenBudget(raw: unknown): number | undefined {
   return undefined;
 }
 
+// OpenClaw introduced accepted-turn delivery in 2026.8.1. Its early
+// implementations still call afterTurn inside tool loops, so hook presence
+// alone cannot select the capture path. Use the host's public runtime version.
+function usesAcceptedTurns(version: string | undefined): boolean | undefined {
+  const match = version?.match(/^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:[-+].*)?$/);
+  if (!match) return undefined;
+  const [, year, month, day] = match;
+  const date = Number(year) * 10_000 + Number(month) * 100 + Number(day);
+  return date >= 20260801;
+}
+
 export function createMemoryOpenVikingContextEngine(params: {
   id: string;
   name: string;
   version?: string;
+  hostVersion?: string;
   cfg: ParsedMemoryOpenVikingConfig;
   logger: Logger;
   getClient: () => Promise<OpenVikingClient>;
@@ -278,6 +290,7 @@ export function createMemoryOpenVikingContextEngine(params: {
     traceRecorder,
   } = params;
 
+  const acceptedTurns = usesAcceptedTurns(params.hostVersion);
   const diagEnabled = cfg.emitStandardDiagnostics;
   const bypassSessionPatterns = compileSessionPatterns(cfg.bypassSessionPatterns);
   const diag = (stage: string, sessionId: string, data: Record<string, unknown>) =>
@@ -398,6 +411,9 @@ export function createMemoryOpenVikingContextEngine(params: {
     // Accepted turns arrive here instead of afterTurn on current OpenClaw.
     // The server owns the durable receipt, including retry-after-restart safety.
     async commitTurn(params): Promise<{ status: "committed" | "duplicate" }> {
+      if (acceptedTurns === false) {
+        throw new Error("openviking: commitTurn is unavailable on this legacy OpenClaw host");
+      }
       if (!params.advancementKey?.trim()) throw new Error("commitTurn requires advancementKey");
       const sessionKey = resolveSessionKey(params) ?? params.sessionTarget?.sessionKey;
       const ovSessionId = openClawSessionToOvStorageId(params.sessionId, sessionKey);
@@ -422,6 +438,12 @@ export function createMemoryOpenVikingContextEngine(params: {
     },
 
     async afterTurn(afterTurnParams): Promise<void> {
+      // Accepted-turn hosts own delivery via their outbox. A loop checkpoint
+      // must not append the same messages through the ordinary message API.
+      if (acceptedTurns === true || !cfg.autoCapture) return;
+      if (acceptedTurns === undefined) {
+        throw new Error("openviking: cannot select capture path without a valid OpenClaw runtime.version");
+      }
       const tokenBudget = validTokenBudget(afterTurnParams.tokenBudget) ?? 128_000;
       await afterTurnOpenVikingSession({
         sessionId: afterTurnParams.sessionId,

@@ -61,6 +61,7 @@ function makeEngine(opts?: {
     id: "openviking",
     name: "Test Engine",
     version: "test",
+    hostVersion: "2026.5.27",
     cfg,
     logger,
     getClient,

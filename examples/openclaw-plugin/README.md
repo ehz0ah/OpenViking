@@ -13,7 +13,18 @@ outbox for retry, including after restart or session compaction.
 This path requires an OpenViking server that supports the accepted-turn endpoint;
 upgrade the server together with the plugin. An older server rejects the request,
 and the plugin does not fall back to message POSTs that could duplicate a turn.
-Older OpenClaw hosts calling `afterTurn` retain the existing capture behavior.
+The plugin uses the host's `api.runtime.version` to choose one capture path:
+OpenClaw before 2026.8.1 uses legacy `afterTurn`; 2026.8.1 and later capture only
+through `commitTurn`, even if the host also calls `afterTurn` during tool loops.
+An unknown host version cannot use legacy capture because guessing could duplicate messages.
+
+With `peer_role=sender`, accepted user turns require trusted sender identity in
+`commitTurn.runtimeContext.senderId`. Published OpenClaw 2026.9.3 does not supply
+this field: these turns fail explicitly and remain in its outbox rather than being
+stored as self-owned memory. Sender-scoped accepted-turn capture therefore needs
+a host that forwards sender identity on every delivery, including retries.
+The default `peer_role=none` and `peer_role=assistant` do not require sender identity.
+Do not change ownership mode merely to drain pending sender-scoped turns.
 
 ## Quick Start
 

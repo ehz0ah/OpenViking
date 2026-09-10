@@ -4,9 +4,9 @@ import { memoryOpenVikingConfigSchema } from "../../config.js";
 import { createMemoryOpenVikingContextEngine } from "../../context-engine.js";
 import { openClawSessionToOvStorageId } from "../../routing/identity-routing.js";
 
-function makeEngine(client: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
+function makeEngine(client: Record<string, unknown>, overrides: Record<string, unknown> = {}, hostVersion: string | undefined = "2026.9.3") {
   return createMemoryOpenVikingContextEngine({
-    id: "openviking", name: "OpenViking", version: "test",
+    id: "openviking", name: "OpenViking", version: "test", hostVersion,
     cfg: memoryOpenVikingConfigSchema.parse({ mode: "remote", baseUrl: "http://127.0.0.1:1933", ...overrides }),
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     getClient: vi.fn().mockResolvedValue(client as unknown as OpenVikingClient),
@@ -45,7 +45,7 @@ describe("accepted-turn capture", () => {
     expect(c.addSessionMessage).not.toHaveBeenCalled();
   });
 
-  it("preserves sender identity from a host runtime context", async () => {
+  it("preserves explicitly supplied trusted sender context (not supplied by 2026.9.3)", async () => {
     const c = client();
     await makeEngine(c, { peer_role: "sender" }).commitTurn({
       ...turn, runtimeContext: { senderId: "alice" },
@@ -54,6 +54,79 @@ describe("accepted-turn capture", () => {
       expect.objectContaining({ role: "user", peer_id: "alice" }),
       expect.objectContaining({ role: "assistant" }),
     ]);
+  });
+
+  // 2026.8.1 tool-result-context-guard calls afterTurn at loop checkpoints;
+  // context-engine-turn-outbox later supplies the entire accepted turn.
+  it.each(["2026.8.1", "2026.8.1-1", "2026.9.3"])(
+    "captures a tool turn once when %s calls both hooks", async (hostVersion) => {
+      const c = client();
+      const engine = makeEngine(c, {}, hostVersion);
+      const messages = [
+        { role: "user", content: "Check my saved color." },
+        { role: "assistant", content: [{ type: "toolCall", id: "tool-1", name: "lookup", arguments: {} }] },
+        { role: "toolResult", toolCallId: "tool-1", content: [{ type: "text", text: "cobalt" }] },
+        { role: "assistant", content: [{ type: "text", text: "Your color is cobalt." }] },
+      ];
+      await engine.afterTurn!({ ...turn, sessionFile: "", messages: messages.slice(0, 3), prePromptMessageCount: 0 });
+      expect(c.addSessionMessage).not.toHaveBeenCalled();
+      expect(c.getSession).not.toHaveBeenCalled();
+      await expect(engine.commitTurn({ ...turn, messages })).resolves.toEqual({ status: "committed" });
+      expect(c.addSessionTurn).toHaveBeenCalledTimes(1);
+      expect(c.addSessionTurn.mock.calls[0][2]).toHaveLength(3);
+      // Even an extra finalization hook cannot write the accepted turn again.
+      await engine.afterTurn!({ ...turn, sessionFile: "", messages, prePromptMessageCount: 3 });
+      expect(c.addSessionMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains ordinary capture on hosts before accepted-turn delivery", async () => {
+    const c = client();
+    const engine = makeEngine(c, {}, "2026.7.31");
+    await engine.afterTurn!({ ...turn, sessionFile: "", prePromptMessageCount: 0 });
+    expect(c.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(c.addSessionTurn).not.toHaveBeenCalled();
+    await expect(engine.commitTurn(turn)).rejects.toThrow("legacy OpenClaw host");
+  });
+
+  it.each(["", "unknown"])("does not guess the capture path for host version %j", async (version) => {
+    const c = client();
+    const engine = makeEngine(c, {}, version);
+    await expect(engine.afterTurn!({ ...turn, sessionFile: "", prePromptMessageCount: 0 }))
+      .rejects.toThrow("runtime.version");
+    expect(c.addSessionMessage).not.toHaveBeenCalled();
+    // An actual commitTurn delivery is authoritative and can safely use receipts.
+    await expect(engine.commitTurn(turn)).resolves.toEqual({ status: "committed" });
+  });
+
+  // Exact identity shape from published 2026.9.3 context-engine-turn-outbox:
+  // sessionTarget has agent/session identifiers, but no runtimeContext/senderId.
+  it("retains a sender-scoped turn instead of silently writing self-owned messages", async () => {
+    const c = client();
+    const delivered = { ...turn, sessionTarget: { agentId: "main", sessionKey: turn.sessionKey } };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const engine = makeEngine(c, { peer_role: "sender" });
+      await expect(engine.commitTurn(delivered)).rejects.toThrow("trusted sender identity");
+    }
+    expect(c.addSessionTurn).not.toHaveBeenCalled();
+    expect(c.addSessionMessage).not.toHaveBeenCalled();
+    expect(c.getSession).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "   ", "@#$"])("rejects unusable sender identity %j before writing", async (senderId) => {
+    const c = client();
+    await expect(makeEngine(c, { peer_role: "sender" }).commitTurn({ ...turn, runtimeContext: { senderId } }))
+      .rejects.toThrow("trusted sender identity");
+    expect(c.addSessionTurn).not.toHaveBeenCalled();
+  });
+
+  it.each(["none", "assistant"])("accepts real host identity with peer_role=%s", async (peer_role) => {
+    const c = client();
+    await expect(makeEngine(c, { peer_role }).commitTurn({ ...turn, sessionTarget: { agentId: "main" } }))
+      .resolves.toEqual({ status: "committed" });
+    const messages = c.addSessionTurn.mock.calls[0][2];
+    expect(messages[0].peer_id).toBeUndefined();
+    expect(messages[1].peer_id).toBe(peer_role === "assistant" ? "agent" : undefined);
   });
 
   it("uses the server receipt after an engine restart", async () => {
@@ -86,6 +159,8 @@ describe("accepted-turn capture", () => {
 
   it.each([
     [{ autoCapture: false }, {}],
+    [{ autoCapture: false, peer_role: "sender" }, {}],
+    [{ peer_role: "sender" }, { isHeartbeat: true }],
     [{}, { isHeartbeat: true }],
     [{ bypassSessionPatterns: ["agent:main:explicit:*"] }, {}],
   ])("preserves capture exclusions %j %j", async (cfg, extra) => {

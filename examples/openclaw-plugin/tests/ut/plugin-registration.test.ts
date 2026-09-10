@@ -34,6 +34,7 @@ function withOpenVikingEnv<T>(
 function createPluginApi(pluginConfig: Record<string, unknown>) {
   return {
     pluginConfig,
+    runtime: { version: "2026.8.1" },
     logger: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -86,6 +87,18 @@ describe("plugin registration", () => {
         expect(api.registerContextEngine).toHaveBeenCalledWith("openviking", expect.any(Function));
       },
     );
+  });
+
+  it("passes the host runtime version to the registered engine", async () => {
+    const api = createPluginApi({ mode: "remote", baseUrl: "http://127.0.0.1:1", autoRecall: false });
+    contextEnginePlugin.register(api as any);
+    const engine = api.registerContextEngine.mock.calls[0][1]();
+    // Would try a message POST if registration lost the host version.
+    await expect(engine.afterTurn({
+      sessionId: "s", sessionFile: "", prePromptMessageCount: 0,
+      messages: [{ role: "user", content: "hello" }],
+    })).resolves.toBeUndefined();
+    expect(api.logger.error).not.toHaveBeenCalled();
   });
 
   it("registers the feature-gates Gateway RPC when Gateway methods are available", () => {
