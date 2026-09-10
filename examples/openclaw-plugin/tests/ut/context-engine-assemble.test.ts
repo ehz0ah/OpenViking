@@ -117,6 +117,37 @@ describe("context-engine assemble()", () => {
       expect(result.estimatedTokens).toBeGreaterThan(systemPromptTokens(result.systemPromptAddition));
     });
 
+    it("recalls another detail from the same memory on a follow-up turn", async () => {
+      const { engine, client } = makeEngine(undefined, { cfgOverrides: { autoRecall: true } });
+      const savedMemory = "Use Rust; deploy in eu-west.";
+      let messageCount = 2;
+      let lastServedAt: number | undefined;
+      client.searchContext.mockImplementation(async (_query, options) => {
+        const cooled = lastServedAt !== undefined && messageCount - lastServedAt < (options.dedupTurns ?? 0);
+        if (cooled) return { entries: [], rendered: "", stats: {} };
+        lastServedAt = messageCount;
+        return {
+          entries: [{ uri: "viking://user/default/memories/development", category: "preferences", text: savedMemory, score: 0.95 }],
+          rendered: `<memory>${savedMemory}</memory>`, stats: {},
+        };
+      });
+      const common = { sessionId: "existing-session", availableTools: new Set<string>() };
+      const messages = [{ role: "user", content: "Hello" }, { role: "assistant", content: "Hello" }];
+      const first = await engine.assemble({ ...common, messages, prompt: "What language should I use?" });
+      expect(first.systemPromptAddition).toContain(savedMemory);
+
+      const followupMessages = [...messages,
+        { role: "user", content: "What language should I use?" },
+        { role: "assistant", content: "Rust." },
+      ];
+      messageCount = followupMessages.length;
+      const second = await engine.assemble({ ...common, messages: followupMessages, prompt: "What region should I deploy in?" });
+      expect(second.systemPromptAddition).toContain("eu-west");
+      expect(second.messages).toBe(followupMessages);
+      expect(JSON.stringify(second.messages)).not.toContain("eu-west");
+      expect(client.searchContext).toHaveBeenLastCalledWith("What region should I deploy in?", expect.objectContaining({ dedupTurns: 0 }));
+    });
+
     it("keeps archive guidance and recalls the current prompt rather than the history tail", async () => {
       const { engine, client } = makeEngine({
         latest_archive_overview: "Previously discussed repository setup.",

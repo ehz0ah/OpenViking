@@ -460,6 +460,8 @@ async function recallForAssemble(
     ovSessionId,
     queryTruncated: recallQuery.truncated,
     rawUserTextPreview: recallQuery.query,
+    // System additions are transient; the next turn must be able to recall the same URI.
+    dedupTurns: params.isMainAssemble ? 0 : undefined,
   });
 }
 
