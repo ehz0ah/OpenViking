@@ -1481,3 +1481,32 @@ async def test_commit_failed_when_summary_fails_does_not_block_next_commit(
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["archived"] is True
+
+
+async def test_accepted_turn_endpoint_retries_and_rejects_key_reuse(
+    client: httpx.AsyncClient, service
+):
+    payload = {
+        "advancement_key": "test-delivery",
+        "messages": [
+            {"role": "user", "content": "Remember cobalt.", "peer_id": "alice"},
+            {"role": "assistant", "content": "Acknowledged.", "peer_id": "assistant"},
+        ],
+    }
+    path = "/api/v1/sessions/accepted-turn-http/turns"
+    first = await client.post(path, json=payload)
+    assert first.status_code == 200, first.text
+    assert first.json()["result"]["status"] == "committed"
+    replay = await client.post(path, json=payload)
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["result"]["status"] == "duplicate"
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
+    session = await service.sessions.get("accepted-turn-http", ctx)
+    assert [message.peer_id for message in session.messages] == ["alice", "assistant"]
+    assert [message.content for message in session.messages] == ["Remember cobalt.", "Acknowledged."]
+    payload["messages"][0]["content"] = "Different message"
+    conflict = await client.post(path, json=payload)
+    assert conflict.status_code == 400, conflict.text
+    invalid = await client.post(path, json={"advancement_key": "", "messages": []})
+    assert invalid.status_code == 400
+    assert invalid.json()["error"]["code"] == "INVALID_ARGUMENT"

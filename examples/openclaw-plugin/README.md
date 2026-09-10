@@ -2,6 +2,19 @@
 
 Use [OpenViking](https://github.com/volcengine/OpenViking) as OpenClaw's long-term context engine: automatic recall, session archive, memory extraction, semantic search, and RAG over a remote OpenViking server.
 
+## Accepted-turn capture compatibility
+
+Current OpenClaw delivers accepted turns through `commitTurn` instead of `afterTurn`.
+This plugin stores that entire turn through `POST /api/v1/sessions/{id}/turns`,
+using OpenClaw's `advancementKey` as the durable retry key. It acknowledges the
+turn only after the server confirms storage. Failed requests remain in OpenClaw's
+outbox for retry, including after restart or session compaction.
+
+This path requires an OpenViking server that supports the accepted-turn endpoint;
+upgrade the server together with the plugin. An older server rejects the request,
+and the plugin does not fall back to message POSTs that could duplicate a turn.
+Older OpenClaw hosts calling `afterTurn` retain the existing capture behavior.
+
 ## Quick Start
 
 ```bash
@@ -23,7 +36,7 @@ The agent runs install → setup → restart → verify automatically. See [INST
 
 | Stage | What happens |
 |-------|-------------|
-| **Every turn** (`afterTurn`) | New messages are appended to an OpenViking session; commit/extraction is threshold-triggered |
+| **Every accepted turn** (`commitTurn`; legacy `afterTurn`) | New messages are appended to an OpenViking session; commit/extraction is threshold-triggered |
 | **Explicit remember** (`memory_store`) | Important long-term facts can be written and committed immediately |
 | **On `/compact`** (`compact`) | Pending session messages are committed and extracted into long-term memories |
 | **Before each reply** (`assemble`) | Relevant memories are auto-retrieved and injected into context |

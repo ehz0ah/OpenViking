@@ -1316,43 +1316,53 @@ class Session:
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
         try:
-            live_messages_missing = False
-            try:
-                self._messages = await self._read_live_messages_strict()
-            except Exception as exc:
-                if not _is_storage_not_found(exc):
-                    raise
-                self._messages = []
-                live_messages_missing = True
-            in_memory_meta = self._meta
-            try:
-                meta_content = await self._viking_fs.read_file(
-                    f"{self._session_uri}/.meta.json",
-                    ctx=self.ctx,
-                )
-                self._meta = SessionMeta.from_dict(json.loads(meta_content))
-            except Exception:
-                # Legacy/malformed metadata must not prevent an otherwise safe
-                # append. Message correctness remains rooted in messages.jsonl.
-                self._meta = in_memory_meta
-
-            await self._apply_appended_messages_to_state(messages)
-            batch_content = "".join(message.to_jsonl() + "\n" for message in messages)
-            if live_messages_missing:
-                await self._viking_fs.write_file(
-                    f"{self._session_uri}/messages.jsonl",
-                    batch_content,
-                    ctx=self.ctx,
-                )
-            else:
-                await self._viking_fs.append_file(
-                    f"{self._session_uri}/messages.jsonl",
-                    batch_content,
-                    ctx=self.ctx,
-                )
-            await self._save_meta()
+            await self._append_messages_locked(messages)
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
+
+    async def _append_messages_locked(self, messages: List[Message]) -> None:
+        """Append while the caller holds the session path lock."""
+        live_messages_missing = False
+        try:
+            self._messages = await self._read_live_messages_strict()
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
+            self._messages = []
+            live_messages_missing = True
+        in_memory_meta = self._meta
+        try:
+            meta_content = await self._viking_fs.read_file(
+                f"{self._session_uri}/.meta.json",
+                ctx=self.ctx,
+            )
+            self._meta = SessionMeta.from_dict(json.loads(meta_content))
+        except Exception:
+            # Legacy/malformed metadata must not prevent an otherwise safe
+            # append. Message correctness remains rooted in messages.jsonl.
+            self._meta = in_memory_meta
+
+        await self._apply_appended_messages_to_state(messages)
+        batch_content = "".join(message.to_jsonl() + "\n" for message in messages)
+        if live_messages_missing:
+            await self._viking_fs.write_file(
+                f"{self._session_uri}/messages.jsonl",
+                batch_content,
+                ctx=self.ctx,
+            )
+        else:
+            await self._viking_fs.append_file(
+                f"{self._session_uri}/messages.jsonl",
+                batch_content,
+                ctx=self.ctx,
+            )
+        await self._save_meta()
+
+    async def add_turn_async(self, messages_spec: List[dict], advancement_key: str) -> str:
+        """Persist one accepted harness turn, idempotently across worker restarts."""
+        from openviking.session.turn_ingestion import append_turn
+
+        return await append_turn(self, messages_spec, advancement_key)
 
     async def _apply_appended_messages_to_state(self, messages: List[Message]) -> None:
         """Update in-memory counters after an authoritative root reload."""

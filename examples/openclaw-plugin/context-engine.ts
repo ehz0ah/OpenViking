@@ -90,6 +90,8 @@ type ContextEngine = {
   /** OpenClaw >=2026.8.1 durable turn advancement; retried with the same advancementKey after host failure. */
   commitTurn: (params: {
     advancementKey: string;
+    sessionTarget?: { agentId?: string; sessionKey?: string };
+    runtimeContext?: Record<string, unknown>;
     messages: AgentMessage[];
     sessionId: string;
     sessionKey?: string;
@@ -332,7 +334,7 @@ export function createMemoryOpenVikingContextEngine(params: {
     };
   }
 
-  const committedTurnKeys = new Set<string>();
+  const turnBudgets = new Map<string, number>();
 
   return {
     info: {
@@ -360,6 +362,11 @@ export function createMemoryOpenVikingContextEngine(params: {
 
     async assemble(assembleParams): Promise<AssembleResult> {
       const tokenBudget = validTokenBudget(assembleParams.tokenBudget) ?? 128_000;
+      const { ovSessionId } = resolveSessionIdentity(assembleParams);
+      turnBudgets.set(ovSessionId, tokenBudget);
+      if (turnBudgets.size > 1024) {
+        turnBudgets.delete(turnBudgets.keys().next().value as string);
+      }
       const isMainAssemble =
         Object.prototype.hasOwnProperty.call(assembleParams, "availableTools") ||
         Object.prototype.hasOwnProperty.call(assembleParams, "citationsMode") ||
@@ -388,20 +395,30 @@ export function createMemoryOpenVikingContextEngine(params: {
       });
     },
 
-    // Capture still happens in afterTurn (host calls it per LLM call + on finalize);
-    // commitTurn only acknowledges the accepted turn so OpenClaw drains its outbox.
-    // ponytail: in-memory key set, not durable across restarts — the host outbox is.
-    async commitTurn({ advancementKey, sessionId }): Promise<{ status: "committed" | "duplicate" }> {
-      if (committedTurnKeys.has(advancementKey)) {
-        diag("commitTurn_duplicate", sessionId, { advancementKey });
-        return { status: "duplicate" };
-      }
-      committedTurnKeys.add(advancementKey);
-      if (committedTurnKeys.size > 1024) {
-        committedTurnKeys.delete(committedTurnKeys.values().next().value as string);
-      }
-      diag("commitTurn", sessionId, { advancementKey });
-      return { status: "committed" };
+    // Accepted turns arrive here instead of afterTurn on current OpenClaw.
+    // The server owns the durable receipt, including retry-after-restart safety.
+    async commitTurn(params): Promise<{ status: "committed" | "duplicate" }> {
+      if (!params.advancementKey?.trim()) throw new Error("commitTurn requires advancementKey");
+      const sessionKey = resolveSessionKey(params) ?? params.sessionTarget?.sessionKey;
+      const ovSessionId = openClawSessionToOvStorageId(params.sessionId, sessionKey);
+      const status = await afterTurnOpenVikingSession({
+        advancementKey: params.advancementKey,
+        sessionId: params.sessionId,
+        sessionKey,
+        messages: params.messages,
+        prePromptMessageCount: 0,
+        isHeartbeat: params.isHeartbeat,
+        runtimeContext: { agentId: params.sessionTarget?.agentId, ...params.runtimeContext },
+        tokenBudget: turnBudgets.get(ovSessionId) ?? 128_000,
+        cfg,
+        getClient,
+        logger,
+        resolveAgentId,
+        rememberSessionAgentId,
+        isBypassedSession,
+        diag,
+      });
+      return { status: status ?? "committed" };
     },
 
     async afterTurn(afterTurnParams): Promise<void> {

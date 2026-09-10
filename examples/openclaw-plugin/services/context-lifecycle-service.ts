@@ -122,9 +122,10 @@ export type CompactOpenVikingSessionParams = {
   diag: (stage: string, sessionId: string, data: Record<string, unknown>) => void;
 };
 
-type AfterTurnClient = Pick<OpenVikingClient, "addSessionMessage" | "getSession" | "commitSession" | "getTask">;
+type AfterTurnClient = Pick<OpenVikingClient, "addSessionMessage" | "addSessionTurn" | "getSession" | "commitSession" | "getTask">;
 
 export type AfterTurnOpenVikingSessionParams = {
+  advancementKey?: string;
   sessionId: string;
   sessionKey?: string;
   messages?: AgentMessage[];
@@ -786,6 +787,7 @@ function messageDigest(messages: AgentMessage[], maxCharsPerMsg = 2000): Array<{
 }
 
 export async function afterTurnOpenVikingSession({
+  advancementKey,
   sessionId,
   sessionKey,
   messages: rawMessages,
@@ -800,7 +802,7 @@ export async function afterTurnOpenVikingSession({
   rememberSessionAgentId,
   isBypassedSession,
   diag,
-}: AfterTurnOpenVikingSessionParams): Promise<void> {
+}: AfterTurnOpenVikingSessionParams): Promise<"committed" | "duplicate" | void> {
   if (!cfg.autoCapture) {
     return;
   }
@@ -885,6 +887,8 @@ export async function afterTurnOpenVikingSession({
     const client = await getClient();
     const createdAt = pickLatestCreatedAt(turnMessages);
     const senderRoleId = toRoleId(sender.senderId);
+    const captured: Parameters<OpenVikingClient["addSessionTurn"]>[2] = [];
+    let status: "committed" | "duplicate" = "committed";
     for (const msg of extractedMessages) {
       const ovParts = msg.parts.map((part) => {
         if (part.type === "text") {
@@ -905,20 +909,21 @@ export async function afterTurnOpenVikingSession({
       });
 
       if (ovParts.length > 0) {
-        await client.addSessionMessage(
-          ovSessionId,
-          msg.role,
-          ovParts,
-          undefined,
-          createdAt,
-          resolveOpenVikingMessagePeerId({
-            peerRole: cfg.peer_role ?? "none",
-            role: msg.role,
-            senderPeerId: senderRoleId,
-            assistantPeerId: agentId,
-          }),
-        );
+        const peerId = resolveOpenVikingMessagePeerId({
+          peerRole: cfg.peer_role ?? "none",
+          role: msg.role,
+          senderPeerId: senderRoleId,
+          assistantPeerId: agentId,
+        });
+        if (advancementKey) {
+          captured.push({ role: msg.role, parts: ovParts, created_at: createdAt, peer_id: peerId });
+        } else {
+          await client.addSessionMessage(ovSessionId, msg.role, ovParts, undefined, createdAt, peerId);
+        }
       }
+    }
+    if (advancementKey && captured.length > 0) {
+      status = await client.addSessionTurn(ovSessionId, advancementKey, captured);
     }
 
     const session = await client.getSession(ovSessionId);
@@ -936,7 +941,7 @@ export async function afterTurnOpenVikingSession({
         senderIdFound: sender.found,
         senderId: sender.senderId ?? null,
       });
-      return;
+      return status;
     }
 
     const commitResult = await client.commitSession(ovSessionId, {
@@ -968,6 +973,7 @@ export async function afterTurnOpenVikingSession({
       );
       void pollPhase2ExtractionOutcome(client, commitResult.task_id, logger, ovSessionId);
     }
+    return status;
   } catch (err) {
     logger.warn?.(`openviking: afterTurn failed: ${String(err)}`);
     const sender = extractRuntimeSenderId(runtimeContext);
@@ -976,6 +982,7 @@ export async function afterTurnOpenVikingSession({
       senderIdFound: sender.found,
       senderId: sender.senderId ?? null,
     });
+    if (advancementKey) throw err;
   }
 }
 

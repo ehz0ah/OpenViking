@@ -166,6 +166,15 @@ class BatchAddMessageRequest(BaseModel):
     telemetry: TelemetryRequest = False
 
 
+class AddTurnRequest(BaseModel):
+    """An accepted harness turn with a stable delivery key."""
+
+    advancement_key: str = Field(..., min_length=1, max_length=512)
+    messages: List[AddMessageRequest] = Field(..., min_length=1, max_length=20_000)
+
+    model_config = {"extra": "forbid"}
+
+
 class UsedRequest(BaseModel):
     """Request model for recording usage."""
 
@@ -830,6 +839,34 @@ async def batch_add_messages(
         fn=_batch_add,
     )
     return Response(status="ok", result=execution.result, telemetry=execution.telemetry)
+
+
+@router.post("/{session_id}/turns")
+async def add_turn(
+    request: AddTurnRequest,
+    session_id: str = Path(..., description="Session ID"),
+    _ctx: RequestContext = Depends(get_session_request_context),
+):
+    """Durably accept a turn once; retries survive restarts and session commits."""
+    service = get_service()
+    session = await service.sessions.get(session_id, _ctx, auto_create=True)
+    specs = [
+        {
+            "role": message.role,
+            "parts": _resolve_message_parts(message, _ctx),
+            "peer_id": message.peer_id,
+            "created_at": message.created_at,
+            "turn_id": message.turn_id,
+            "message_kind": message.message_kind,
+            "source_message_ids": message.source_message_ids,
+        }
+        for message in request.messages
+    ]
+    status = await session.add_turn_async(specs, request.advancement_key)
+    await service.sessions.maybe_schedule_auto_commit(
+        session_id, _ctx, reason_hint="message_write", session=session
+    )
+    return Response(status="ok", result={"status": status, "session_id": session_id})
 
 
 @router.post("/{session_id}/used")

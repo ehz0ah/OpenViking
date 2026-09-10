@@ -794,3 +794,21 @@ describe("OpenVikingClient canonical namespace policy", () => {
     expect(body).not.toHaveProperty("role_id");
   });
 });
+
+describe("accepted turn delivery", () => {
+  it("sends the stable key and accepts a durable duplicate receipt", async () => {
+    const transport = vi.fn().mockResolvedValue(okResponse({ status: "duplicate" }));
+    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000, "", "", undefined, false, true, { transport });
+    const messages = [{ role: "user", parts: [{ type: "text" as const, text: "hello" }] }];
+    await expect(client.addSessionTurn("session", "key", messages)).resolves.toBe("duplicate");
+    expect(transport.mock.calls[0][0]).toBe("http://127.0.0.1:1933/api/v1/sessions/session/turns");
+    expect(JSON.parse(String(transport.mock.calls[0][1].body))).toEqual({ advancement_key: "key", messages });
+  });
+
+  it("does not fall back to message POSTs on an older server", async () => {
+    const transport = vi.fn().mockResolvedValue(new Response('{"detail":"Not Found"}', { status: 404 }));
+    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000, "", "", undefined, false, true, { transport });
+    await expect(client.addSessionTurn("session", "key", [])).rejects.toThrow();
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+});

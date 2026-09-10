@@ -804,6 +804,28 @@ export class OpenVikingClient {
     );
   }
 
+  async addSessionTurn(
+    sessionId: string,
+    advancementKey: string,
+    messages: Array<{
+      role: string;
+      parts: Parameters<OpenVikingClient["addSessionMessage"]>[2];
+      created_at?: string;
+      peer_id?: string;
+    }>,
+  ): Promise<"committed" | "duplicate"> {
+    // A separate endpoint fails safely on older servers; it must never fall
+    // back to non-idempotent message POSTs after an ambiguous response.
+    const result = await this.request<{ status: string }>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/turns`,
+      { method: "POST", body: JSON.stringify({ advancement_key: advancementKey, messages }) },
+    );
+    if (result.status !== "committed" && result.status !== "duplicate") {
+      throw new Error(`Invalid accepted-turn status: ${String(result.status)}`);
+    }
+    return result.status;
+  }
+
   /** GET session — server auto-creates if absent; returns session meta including message stats and token usage. */
   async getSession(sessionId: string, actorPeerId?: string): Promise<{
     message_count?: number;
