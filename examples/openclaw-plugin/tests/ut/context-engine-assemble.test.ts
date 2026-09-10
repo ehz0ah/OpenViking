@@ -93,6 +93,68 @@ function makeEngine(
 }
 
 describe("context-engine assemble()", () => {
+  describe("recall from the separately supplied prompt", () => {
+    const prompt = "what backend language should we use?";
+    const memory = "User prefers Rust for backend tasks.";
+    function mockRecall(client: ReturnType<typeof makeEngine>["client"]) {
+      client.searchContext.mockResolvedValue({
+        entries: [{ uri: "viking://user/default/memories/rust-pref", category: "preferences", text: memory, score: 0.93 }],
+        rendered: `<memory>${memory}</memory>`,
+        stats: { candidates: 1, used_tokens: 18 },
+      });
+    }
+
+    it.each([false, true])("recalls on a fresh session (missing session: %s) without manufacturing a user turn", async (missing) => {
+      const { engine, client } = makeEngine(undefined, { cfgOverrides: { autoRecall: true } });
+      if (missing) client.getSessionContext.mockRejectedValue(new Error("[NOT_FOUND] Session not found"));
+      mockRecall(client);
+      const messages: [] = [];
+      const result = await engine.assemble({ sessionId: "new-session", messages, prompt, availableTools: new Set() });
+      expect(client.searchContext).toHaveBeenCalledWith(prompt, expect.objectContaining({ sessionId: "new-session" }));
+      expect(result.messages).toBe(messages);
+      expect(result.systemPromptAddition).toContain(memory);
+      expect(result.systemPromptAddition).not.toContain(prompt);
+      expect(result.estimatedTokens).toBeGreaterThan(systemPromptTokens(result.systemPromptAddition));
+    });
+
+    it("keeps archive guidance and recalls the current prompt rather than the history tail", async () => {
+      const { engine, client } = makeEngine({
+        latest_archive_overview: "Previously discussed repository setup.",
+        pre_archive_abstracts: [], messages: [], estimatedTokens: 10, stats: makeStats(),
+      }, { cfgOverrides: { autoRecall: true } });
+      mockRecall(client);
+      const messages = [{ role: "user", content: "an unrelated old question" }];
+      const result = await engine.assemble({ sessionId: "archived-session", messages, prompt });
+      expect(client.searchContext).toHaveBeenCalledWith(prompt, expect.anything());
+      expect(result.systemPromptAddition).toContain("Session Context Guide");
+      expect(result.systemPromptAddition).toContain(memory);
+      expect(JSON.stringify(result.messages)).not.toContain(memory);
+      expect(messages).toEqual([{ role: "user", content: "an unrelated old question" }]);
+    });
+
+    it.each([
+      { autoRecall: false, prompt, bypassSessionPatterns: [] },
+      { autoRecall: true, prompt: "", bypassSessionPatterns: [] },
+      { autoRecall: true, prompt: "hi", bypassSessionPatterns: [] },
+      { autoRecall: true, prompt, bypassSessionPatterns: ["agent:*:cron:**"] },
+    ])("respects disabled, empty and bypassed recall: %j", async ({ prompt: currentPrompt, ...cfgOverrides }) => {
+      const { engine, client } = makeEngine(undefined, { cfgOverrides });
+      const result = await engine.assemble({ sessionId: "session", sessionKey: "agent:main:cron:task", messages: [], prompt: currentPrompt });
+      expect(client.searchContext).not.toHaveBeenCalled();
+      expect(result.systemPromptAddition).toBeUndefined();
+    });
+
+    it.each(["no hits", "search failure", "budget exhausted"])("preserves history on %s", async (scenario) => {
+      const { engine, client } = makeEngine(undefined, { cfgOverrides: { autoRecall: true } });
+      if (scenario === "search failure") client.searchContext.mockRejectedValue(new Error("unavailable"));
+      if (scenario === "budget exhausted") mockRecall(client);
+      const messages = [{ role: "assistant", content: "previous answer" }];
+      const result = await engine.assemble({ sessionId: "session", messages, prompt, tokenBudget: scenario === "budget exhausted" ? 1 : 128_000 });
+      expect(result.messages).toBe(messages);
+      expect(result.systemPromptAddition).toBeUndefined();
+    });
+  });
+
   it("prepends auto-recall to the latest user message during transformContext", async () => {
       const { engine, client } = makeEngine(
         {
