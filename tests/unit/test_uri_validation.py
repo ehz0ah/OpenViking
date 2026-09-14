@@ -3,10 +3,14 @@
 
 """Tests for common Viking URI boundary validation."""
 
+from contextlib import nullcontext
+
 import pytest
 
-from openviking.core.uri_validation import validate_viking_uri
-from openviking_cli.exceptions import InvalidURIError
+from openviking.core.uri_validation import validate_content_target_uri, validate_viking_uri
+from openviking.server.identity import RequestContext, Role
+from openviking_cli.exceptions import InvalidURIError, PermissionDeniedError
+from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.mark.parametrize(
@@ -111,3 +115,39 @@ def test_validate_viking_uri_rejects_home_alias_for_restricted_scopes():
     scope_list = reason.split("Must be one of:", 1)[1]
     assert "resources" in scope_list
     assert "~" not in scope_list
+
+
+@pytest.mark.parametrize("role", [Role.USER, Role.ADMIN])
+@pytest.mark.parametrize(
+    "uri, actor_peer_id, error",
+    [
+        ("viking://agent/skills", "workspace-peer", None),
+        ("viking://agent/skills/", "workspace-peer", None),
+        ("viking://agent/skills/demo", "workspace-peer", None),
+        ("viking://agent/skills/demo/SKILL.md", "workspace-peer", None),
+        ("viking://agent/skills", None, None),
+        ("viking://agent/skills/demo/SKILL.md", None, None),
+        ("viking://agent/skills", "skills", None),
+        ("viking://agent/skills/demo/SKILL.md", "skills", None),
+        ("viking://user/alice/skills", "workspace-peer", None),
+        ("viking://user/alice/skills", None, None),
+        ("viking://user/bob/skills", "workspace-peer", PermissionDeniedError),
+        ("viking://user/bob/skills", None, PermissionDeniedError),
+        ("viking://agent/skills-extra", "workspace-peer", InvalidURIError),
+        ("viking://agent/skills-extra/skills/demo", "workspace-peer", PermissionDeniedError),
+        ("viking://agent/skills-extra/skills/demo", None, None),
+        ("viking://agent/other-peer/skills/demo", "workspace-peer", PermissionDeniedError),
+        ("viking://agent/workspace-peer/skills/demo", "workspace-peer", None),
+        ("viking://agent/workspace-peer/skills/demo", None, None),
+    ],
+)
+def test_validate_content_target_uri_preserves_skill_access(uri, actor_peer_id, error, role):
+    ctx = RequestContext(
+        user=UserIdentifier("acct", "alice"),
+        role=role,
+        actor_peer_id=actor_peer_id,
+    )
+    expected = pytest.raises(error) if error else nullcontext()
+
+    with expected:
+        assert validate_content_target_uri(uri, ctx, kind="skill") == uri.rstrip("/")
