@@ -8,6 +8,7 @@ import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
 from openai import OpenAI
 
 from openviking.models.vlm.backends.litellm_vlm import (
@@ -518,63 +519,76 @@ class TestVLMExtraRequestBody:
         assert call_kwargs["extra_body"] == {"seed": 7, "enable_thinking": True}
         assert call_kwargs["reasoning_effort"] == "low"
 
-    def test_litellm_build_kwargs_passes_extra_request_body(self):
+    @pytest.mark.parametrize("model", ["ollama/llama3", "openai/gpt-4o-mini"])
+    @pytest.mark.parametrize(
+        "extra_body",
+        [{}, {"num_ctx": 32768, "think": True, "keep_alive": "5m"}],
+        ids=["defaults", "overrides"],
+    )
+    @pytest.mark.parametrize(
+        "method",
+        [
+            "get_completion",
+            "get_completion_async",
+            "get_vision_completion",
+            "get_vision_completion_async",
+        ],
+    )
+    async def test_litellm_serializes_context_options(self, monkeypatch, model, extra_body, method):
+        bodies = []
+        expected_extra = dict(extra_body)
+        path = "/api/generate" if model.startswith("ollama/") else "/chat/completions"
+
+        def send(client, request, **kwargs):
+            assert request.url.host == "vlm.test"
+            if request.url.path == "/api/show":
+                return httpx.Response(200, request=request, json={"model_info": {}})
+            assert request.url.path == path
+            bodies.append(json.loads(request.content))
+            response = (
+                {"response": "ok", "done": True, "prompt_eval_count": 1, "eval_count": 1}
+                if model.startswith("ollama/")
+                else {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]}
+            )
+            return httpx.Response(200, request=request, json=response)
+
+        async def send_async(client, request, **kwargs):
+            return send(client, request, **kwargs)
+
+        monkeypatch.setattr(httpx.Client, "send", send)
+        monkeypatch.setattr(httpx.AsyncClient, "send", send_async)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         vlm = LiteLLMVLMProvider(
             {
-                "model": "ollama/llama3",
+                "model": model,
                 "provider": "litellm",
-                "api_base": "http://127.0.0.1:11434",
-                "extra_request_body": {"think": False},
+                "api_base": "http://vlm.test",
+                "extra_request_body": extra_body,
+                "max_retries": 0,
             }
         )
+        result = getattr(vlm, method)(prompt="hello")
+        if method.endswith("_async"):
+            result = await result
 
-        kwargs = vlm._build_text_kwargs(prompt="hello")
-
-        # Ollama models also get a default num_ctx; the explicit think is kept.
-        assert kwargs["extra_body"] == {"think": False, "num_ctx": 16384}
-
-    def test_ollama_defaults_num_ctx_and_think(self):
-        """Ollama models get a larger context window and thinking disabled by default."""
-        vlm = LiteLLMVLMProvider(
-            {
-                "model": "ollama/qwen3.5:4b",
-                "provider": "litellm",
-                "api_base": "http://127.0.0.1:11434",
-            }
-        )
-
-        kwargs = vlm._build_text_kwargs(prompt="hello")
-
-        assert kwargs["extra_body"] == {"num_ctx": 16384, "think": False}
-
-    def test_ollama_extra_request_body_overrides_num_ctx(self):
-        """An explicit num_ctx in extra_request_body is not overridden by the default."""
-        vlm = LiteLLMVLMProvider(
-            {
-                "model": "ollama/qwen3.5:4b",
-                "provider": "litellm",
-                "api_base": "http://127.0.0.1:11434",
-                "extra_request_body": {"num_ctx": 32768},
-            }
-        )
-
-        kwargs = vlm._build_text_kwargs(prompt="hello")
-
-        assert kwargs["extra_body"] == {"num_ctx": 32768, "think": False}
-
-    def test_non_ollama_model_gets_no_num_ctx(self):
-        """num_ctx is Ollama-specific and must not leak into other providers."""
-        vlm = LiteLLMVLMProvider(
-            {
-                "model": "gpt-4o-mini",
-                "provider": "litellm",
-                "api_key": "sk-test",
-            }
-        )
-
-        kwargs = vlm._build_text_kwargs(prompt="hello")
-
-        assert "extra_body" not in kwargs or "num_ctx" not in kwargs.get("extra_body", {})
+        assert result == "ok"
+        assert extra_body == expected_extra
+        assert vlm.extra_request_body == expected_extra
+        assert len(bodies) == 1
+        body = bodies[0]
+        if model.startswith("ollama/"):
+            assert body["options"].get("num_ctx") == expected_extra.get("num_ctx", 16384)
+            assert "num_ctx" not in body
+            assert body["think"] == expected_extra.get("think", False)
+            assert "think" not in body["options"]
+        else:
+            assert "options" not in body
+            if not expected_extra:
+                assert "num_ctx" not in body
+                assert "think" not in body
+        for key, value in expected_extra.items():
+            if key != "num_ctx" or not model.startswith("ollama/"):
+                assert body[key] == value
 
     def test_litellm_dashscope_merges_thinking_with_extra_request_body(self):
         vlm = LiteLLMVLMProvider(

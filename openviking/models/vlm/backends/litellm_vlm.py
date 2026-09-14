@@ -100,11 +100,6 @@ PROVIDER_CONFIGS: Dict[str, Dict[str, Any]] = {
 }
 
 
-# Ollama defaults to a 4096-token context window and silently truncates any
-# longer prompt to fit. OV prompts (memory extraction is ~5k+ tokens) overflow
-# it, so the model never sees the real input and returns empty/garbage with no
-# error. Default to a larger window for Ollama models; callers can override via
-# ``extra_request_body["num_ctx"]``.
 OLLAMA_DEFAULT_NUM_CTX = 16384
 
 # LiteLLM routes that address a local Ollama server.
@@ -311,13 +306,10 @@ class LiteLLMVLMProvider(VLMBase):
         if self.extra_request_body:
             kwargs["extra_body"] = dict(self.extra_request_body)
 
-        # Ollama-specific request options. Without an explicit num_ctx the server
-        # truncates long prompts to its 4096-token default; thinking models left
-        # in thinking mode emit only reasoning and stall on CPU. Set safe
-        # defaults, but let extra_request_body override either.
         if _has_litellm_prefix(model, OLLAMA_LITELLM_PREFIXES):
             extra = kwargs.get("extra_body", {})
-            extra.setdefault("num_ctx", OLLAMA_DEFAULT_NUM_CTX)
+            # LiteLLM maps num_ctx into Ollama options; extra_body fields stay at the root.
+            kwargs["num_ctx"] = extra.pop("num_ctx", OLLAMA_DEFAULT_NUM_CTX)
             extra.setdefault("think", self._effective_thinking(thinking))
             kwargs["extra_body"] = extra
 
