@@ -244,14 +244,20 @@ def _mcp_failure(message: str) -> _MCPToolFailure:
     return _MCPToolFailure(message)
 
 
-def _mcp_tool(*, name: Optional[str] = None, structured_output: bool = True):
-    """Register a tool that can return an explicit MCP error result.
+def _mcp_error_results(*, structured_output: bool = True):
+    """Adapt an already registered tool to return explicit MCP errors.
 
-    Direct Python calls keep the existing return value. The MCP handler converts
-    only ``_MCPToolFailure`` values to ``CallToolResult(isError=True)``.
+    Apply this above ``@mcp.tool`` so the literal registration remains the
+    authoritative tool list. Direct Python calls keep the existing return value.
+    The registered MCP handler converts only ``_MCPToolFailure`` values to
+    ``CallToolResult(isError=True)``.
     """
 
     def decorator(func):
+        registered_tool = mcp._tool_manager.get_tool(func.__name__)
+        if registered_tool is None:
+            raise RuntimeError(f"MCP tool is not registered: {func.__name__}")
+
         @wraps(func)
         async def wire_handler(*args, **kwargs):
             result = await func(*args, **kwargs)
@@ -265,7 +271,9 @@ def _mcp_tool(*, name: Optional[str] = None, structured_output: bool = True):
                 isError=True,
             )
 
-        mcp.tool(name=name, structured_output=structured_output)(wire_handler)
+        # Keep the schema and metadata produced by the literal @mcp.tool
+        # registration. Only replace the callable used at the wire boundary.
+        registered_tool.fn = wire_handler
 
         @wraps(func)
         async def direct_handler(*args, **kwargs):
@@ -541,7 +549,8 @@ def _mcp_media_download_hint(uri: str) -> str:
     )
 
 
-@_mcp_tool(structured_output=False)
+@_mcp_error_results(structured_output=False)
+@mcp.tool(structured_output=False)
 async def read(
     uris: str | list[str],
     offset: int = 0,
@@ -1050,7 +1059,8 @@ async def _maybe_sitemap_hint(path: str) -> str:
         return ""
 
 
-@_mcp_tool()
+@_mcp_error_results()
+@mcp.tool()
 async def add_resource(
     path: str = "",
     temp_file_id: str = "",
@@ -1319,7 +1329,8 @@ async def add_resource(
 # `resume`, `trigger`, `update --interval`, etc.) for those operations.
 
 
-@_mcp_tool()
+@_mcp_error_results()
+@mcp.tool()
 async def list_watches() -> str:
     """List watch tasks (auto-refresh subscriptions) visible to the current user."""
     service = get_service()
@@ -1351,7 +1362,8 @@ async def list_watches() -> str:
     return "\n".join(lines)
 
 
-@_mcp_tool()
+@_mcp_error_results()
+@mcp.tool()
 async def cancel_watch(to_uri: str) -> str:
     """Cancel a watch task by its target URI (e.g. "viking://resources/volcengine/OpenViking")."""
     from openviking.resource import watch_manager as _wm_mod
@@ -1446,7 +1458,8 @@ async def grep(
 # -- glob ------------------------------------------------------------------
 
 
-@_mcp_tool()
+@_mcp_error_results()
+@mcp.tool()
 async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> str:
     """Find viking:// files matching a glob pattern (e.g. **/*.md, *.py). Use this for filename matching; use the search tool for content-based retrieval."""
     service = get_service()
