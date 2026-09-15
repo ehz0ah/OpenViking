@@ -267,6 +267,7 @@ async def find(
     level: Optional[List[int]] = None,
     context_type: Optional[Union[str, List[str]]] = None,
     read_content: bool = False,
+    include_timestamps: bool = False,
 ) -> str:
     """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills."""
     service = get_service()
@@ -300,7 +301,13 @@ async def find(
             filter=context_filter,
             level=level,
         )
-    return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
+    return await _format_search_result(
+        result,
+        service=service,
+        ctx=ctx,
+        read_content=read_content,
+        include_timestamps=include_timestamps,
+    )
 
 
 # This tool exposes two of the router's context-only fields as a pair each, so a caller
@@ -335,6 +342,7 @@ async def search(
     rewrite: Literal["off", "auto"] = "off",
     rewrite_max_bullets: Annotated[int, Field(ge=1, le=20)] = 6,
     read_content: bool = False,
+    include_timestamps: bool = False,
 ) -> str:
     """Deep semantic retrieval with optional session context and intent analysis.
 
@@ -350,6 +358,8 @@ async def search(
     if mode == "context":
         if read_content:
             raise InvalidArgumentError("read_content is only supported in mode='list'")
+        if include_timestamps:
+            raise InvalidArgumentError("include_timestamps is only supported in mode='list'")
         if target_uri:
             raise InvalidArgumentError("target_uri is not supported in mode='context'")
         if detail != "auto" and detail_by_category:
@@ -445,7 +455,13 @@ async def search(
         filter=context_filter,
         level=level,
     )
-    return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
+    return await _format_search_result(
+        result,
+        service=service,
+        ctx=ctx,
+        read_content=read_content,
+        include_timestamps=include_timestamps,
+    )
 
 
 def _hit_uri(ctx_type: str, uri: str) -> str:
@@ -495,7 +511,14 @@ async def _describe_skills_by_package(items: List[Dict[str, Any]], *, service, c
     await asyncio.gather(*(_describe(root) for root in pending))
 
 
-async def _format_search_result(result, *, service, ctx, read_content: bool = False) -> str:
+async def _format_search_result(
+    result,
+    *,
+    service,
+    ctx,
+    read_content: bool = False,
+    include_timestamps: bool = False,
+) -> str:
     items: List[Dict[str, Any]] = []
     seen: dict[str, int] = {}
     for ctx_type, contexts in [
@@ -511,6 +534,8 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
                 "hit_uri": m.uri,
                 "score": getattr(m, "score", 0.0),
                 "abstract": getattr(m, "abstract", "") or getattr(m, "overview", ""),
+                "created_at": getattr(m, "created_at", None),
+                "updated_at": getattr(m, "updated_at", None),
             }
             # Several files of one skill package can match; keep the best-scored hit.
             previous = seen.get(uri)
@@ -546,6 +571,11 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
         abstract = (item["abstract"] or "(no abstract)").strip()
         uri = item["uri"]
         line = f"- [{item['type']} {item['score'] * 100:.0f}%] {uri}\n    {abstract}"
+        if include_timestamps:
+            if item["created_at"] is not None:
+                line += f"\n    Created: {item['created_at']}"
+            if item["updated_at"] is not None:
+                line += f"\n    Updated: {item['updated_at']}"
         if uri in contents:
             line += f"\n\n    {contents[uri]}"
         lines.append(line)
