@@ -484,3 +484,89 @@ def test_save_config_preserves_profiles_and_scope_when_target_is_invalid(externa
         assert (target / "config.yaml").read_text() == invalid
     finally:
         reset_hermes_home_override(token)
+
+
+def test_live_session_commits_at_turn_threshold_and_rearms(external_provider, monkeypatch):
+    """A session that stays open must commit bounded batches repeatedly."""
+    _, provider, openviking_module, _ = external_provider("live-commit")
+    monkeypatch.setattr(openviking_module, "_LIVE_SESSION_COMMIT_TURN_THRESHOLD", 2)
+    from unittest.mock import Mock
+
+    provider._session_id = "live-sid"
+    provider._client = Mock()
+    provider._ensure_client = lambda: True
+    provider._new_client = lambda: provider._client
+
+    provider.sync_turn("one", "reply", session_id="live-sid")
+    provider.sync_turn("two", "reply", session_id="live-sid")
+    assert provider._drain_finalizers(timeout=2.0)
+    assert provider._client.post.call_count == 3
+    assert provider._turn_count == 0
+    assert provider._has_committed_session("live-sid")
+
+    provider.sync_turn("three", "reply", session_id="live-sid")
+    provider.sync_turn("four", "reply", session_id="live-sid")
+    assert provider._drain_finalizers(timeout=2.0)
+    assert provider._client.post.call_count == 6
+
+
+def test_live_commit_waits_for_registered_writer_before_committing(external_provider, monkeypatch):
+    """A live threshold commit must not cross an upload that is still running."""
+    _, provider, openviking_module, _ = external_provider("live-commit")
+    monkeypatch.setattr(openviking_module, "_LIVE_SESSION_COMMIT_TURN_THRESHOLD", 1)
+    from unittest.mock import Mock
+
+    provider._session_id = "live-sid"
+    provider._client = Mock()
+    provider._ensure_client = lambda: True
+    provider._new_client = lambda: provider._client
+    upload_started = threading.Event()
+    release_upload = threading.Event()
+    commit_paths = []
+
+    def post(path, payload=None, **kwargs):
+        if path.endswith("/messages/batch"):
+            upload_started.set()
+            assert release_upload.wait(timeout=2.0)
+        elif path.endswith("/commit"):
+            commit_paths.append(path)
+        return {}
+
+    provider._client.post.side_effect = post
+    provider.sync_turn("one", "reply", session_id="live-sid")
+    assert upload_started.wait(timeout=2.0)
+    assert commit_paths == []
+    release_upload.set()
+    assert provider._drain_finalizers(timeout=2.0)
+    assert commit_paths == ["/api/v1/sessions/live-sid/commit"]
+
+
+def test_failed_live_commit_stays_pending_and_retries_on_next_turn(external_provider, monkeypatch):
+    _, provider, openviking_module, _ = external_provider("live-commit")
+    monkeypatch.setattr(openviking_module, "_LIVE_SESSION_COMMIT_TURN_THRESHOLD", 1)
+    from unittest.mock import Mock
+
+    provider._session_id = "live-sid"
+    provider._client = Mock()
+    provider._ensure_client = lambda: True
+    provider._new_client = lambda: provider._client
+    commit_attempts = []
+
+    def post(path, payload=None, **kwargs):
+        if path.endswith("/commit"):
+            commit_attempts.append(path)
+            if len(commit_attempts) == 1:
+                raise RuntimeError("temporary failure")
+        return {}
+
+    provider._client.post.side_effect = post
+    provider.sync_turn("one", "reply", session_id="live-sid")
+    assert provider._drain_finalizers(timeout=2.0)
+    assert provider._turn_count == 1
+    assert not provider._has_committed_session("live-sid")
+
+    provider.sync_turn("two", "reply", session_id="live-sid")
+    assert provider._drain_finalizers(timeout=2.0)
+    assert len(commit_attempts) == 2
+    assert provider._turn_count == 0
+    assert provider._has_committed_session("live-sid")
