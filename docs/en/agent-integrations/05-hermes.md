@@ -1,23 +1,6 @@
 # Hermes Agent
 
-[Hermes Agent](https://hermes-agent.nousresearch.com/) by Nous Research connects to
-OpenViking through a memory provider for storage, recall, and extraction. The
-standalone provider is maintained in
-[`examples/hermes-plugin`](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin).
-
-## Install
-
-```bash
-hermes plugins install 'https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin'
-hermes plugins enable openviking
-```
-
-Use a current Hermes version with repository-subdirectory plugin support.
-If your Hermes version still bundles OpenViking, the bundled copy takes
-precedence and existing setup continues to work. Keep
-`memory.provider: openviking`, existing settings, and linked `ovcli.conf` files. No memory data
-needs to move. Automatic installation after core removal requires an OpenViking
-entry in the Hermes plugin catalog.
+[Hermes Agent](https://hermes-agent.nousresearch.com/) by Nous Research has a first-class OpenViking memory provider built in. No plugin to install — just point Hermes at your OpenViking server and it handles memory storage, recall, and extraction natively.
 
 ## Keep the Python environments separate
 

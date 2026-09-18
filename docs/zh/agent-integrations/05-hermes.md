@@ -1,19 +1,6 @@
 # Hermes Agent
 
-[Hermes Agent](https://hermes-agent.nousresearch.com/) (Nous Research) 通过记忆提供方连接 OpenViking，支持记忆存储、召回和抽取。独立插件在
-[`examples/hermes-plugin`](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin) 中维护。
-
-## 安装
-
-```bash
-hermes plugins install 'https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin'
-hermes plugins enable openviking
-```
-
-请使用支持仓库子目录插件的新版 Hermes。如果当前 Hermes 仍内置 OpenViking，
-内置副本会优先加载，已有配置可继续使用。保留 `memory.provider: openviking`、
-现有设置和关联的 `ovcli.conf` 文件，无需迁移记忆数据。核心移除内置副本后的
-自动安装，还需要在 Hermes 插件目录中发布 OpenViking 条目。
+[Hermes Agent](https://hermes-agent.nousresearch.com/) (Nous Research) 内置 OpenViking 记忆提供方。无需安装插件——把 Hermes 指向你的 OpenViking 服务即可，记忆存储、召回和抽取均原生支持。
 
 ## 隔离 Python 环境
 

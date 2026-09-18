@@ -2,11 +2,18 @@
 
 Context database by Volcengine (ByteDance) with filesystem-style knowledge hierarchy, tiered retrieval, and automatic memory extraction.
 
-This is the standalone Hermes memory provider maintained in the OpenViking
-repository. See [DEVELOPMENT.md](DEVELOPMENT.md) for its source, license, migration
-contract, and test commands.
+This directory prepares the standalone OpenViking provider for migration out of
+Hermes core. The installation and upgrade steps below are for migration testing
+in a separate Hermes profile.
 
-## Install
+For normal use while Hermes still bundles OpenViking, follow the
+[Hermes integration guide](../../docs/en/agent-integrations/05-hermes.md) and run
+`hermes memory setup openviking`. No external plugin installation is needed.
+
+See [DEVELOPMENT.md](DEVELOPMENT.md) for the source, license, migration contract,
+and test commands.
+
+## Install for migration testing
 
 Use a current Hermes version with repository-subdirectory plugin support:
 
@@ -28,7 +35,7 @@ data needs to move. Automatic installation after core removal also requires a
 published `openviking` entry in the Hermes catalog; this directory alone does
 not register one.
 
-## Upgrade
+## Upgrade a test installation
 
 For a direct subdirectory installation, use force-reinstallation instead of
 `hermes plugins update openviking`. Hermes does not retain the repository's
