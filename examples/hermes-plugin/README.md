@@ -3,12 +3,8 @@
 Context database by Volcengine (ByteDance) with filesystem-style knowledge hierarchy, tiered retrieval, and automatic memory extraction.
 
 This is the standalone Hermes memory provider maintained in the OpenViking
-repository. It was imported from the
-[Nous Research handoff](https://github.com/NousResearch/hermes-plugin-openviking/tree/5dca75f4d3dcef9467ce2ff32e170d84c679de5f).
-The provider code and manifest are unchanged. The imported provider retains its
-[MIT license and copyright notice](LICENSE); OpenViking's other licenses are
-unchanged. Original contributor history is available in
-[Hermes Agent](https://github.com/NousResearch/hermes-agent/commits/d177b119e9c56c9ddc0b7379ffce52341ec06584/plugins/memory/openviking).
+repository. See [UPSTREAM.md](UPSTREAM.md) for its source, license, migration
+contract, and test commands.
 
 ## Install
 
@@ -209,20 +205,3 @@ are also allowed because OpenViking supports them. The tool rejects directories,
 resources, skills, sessions, generated summary files, and URIs with query
 strings or fragments. Use OpenViking's MCP, CLI, or admin APIs for broader
 resource and directory cleanup.
-
-## Development
-
-The tests require a Hermes checkout with its development dependencies installed.
-CI uses Hermes commit `d177b119e9c56c9ddc0b7379ffce52341ec06584`.
-From that checkout, run:
-
-```bash
-PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}" HERMES_TEST_FILE_RETRIES=0 \
-  scripts/run_tests.sh /path/to/OpenViking/examples/hermes-plugin/tests \
-  --confcutdir=/path/to/OpenViking/examples/hermes-plugin/tests -q
-```
-
-The tests use temporary profiles and Hermes's external-provider loader with
-bundled-provider discovery disabled. `--confcutdir` prevents pytest from loading
-the provider as a test package before Hermes loads it. Setup still uses private
-helpers from `hermes_cli.memory_setup`; check compatibility when updating Hermes.
