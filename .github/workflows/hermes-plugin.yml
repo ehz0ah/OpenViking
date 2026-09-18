@@ -1,0 +1,36 @@
+name: Hermes plugin
+
+on:
+  pull_request:
+    paths:
+      - "examples/hermes-plugin/**"
+      - ".github/workflows/hermes-plugin.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  standalone:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+        with:
+          repository: NousResearch/hermes-agent
+          ref: d177b119e9c56c9ddc0b7379ffce52341ec06584
+          path: .hermes-test-runtime
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.11"
+      - name: Install Hermes development dependencies
+        working-directory: .hermes-test-runtime
+        run: uv sync --locked --extra dev
+      - name: Test external provider
+        working-directory: .hermes-test-runtime
+        env:
+          HERMES_TEST_FILE_RETRIES: "0"
+        run: |
+          export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
+          scripts/run_tests.sh "$GITHUB_WORKSPACE/examples/hermes-plugin/tests" \
+            --confcutdir="$GITHUB_WORKSPACE/examples/hermes-plugin/tests" -q
