@@ -1,4 +1,4 @@
-# Hermes provider handoff
+# Developing the Hermes memory provider
 
 This directory imports the OpenViking provider from
 [`NousResearch/hermes-plugin-openviking`](https://github.com/NousResearch/hermes-plugin-openviking/tree/5dca75f4d3dcef9467ce2ff32e170d84c679de5f),
@@ -9,6 +9,9 @@ They also match `plugins/memory/openviking/` in Hermes Agent commit
 `d177b119e9c56c9ddc0b7379ffce52341ec06584`. The original MIT license is retained
 in this directory. Original contributor history is available in
 [Hermes Agent](https://github.com/NousResearch/hermes-agent/commits/d177b119e9c56c9ddc0b7379ffce52341ec06584/plugins/memory/openviking).
+
+Contributions to this directory are provided under its [MIT license](LICENSE).
+Preserve the existing copyright and permission notice.
 
 The distribution name is `hermes-plugin-openviking`. The provider, plugin, and
 future Hermes catalog key remain `openviking`. Existing `memory.openviking`

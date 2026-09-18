@@ -3,7 +3,7 @@
 Context database by Volcengine (ByteDance) with filesystem-style knowledge hierarchy, tiered retrieval, and automatic memory extraction.
 
 This is the standalone Hermes memory provider maintained in the OpenViking
-repository. See [UPSTREAM.md](UPSTREAM.md) for its source, license, migration
+repository. See [DEVELOPMENT.md](DEVELOPMENT.md) for its source, license, migration
 contract, and test commands.
 
 ## Install
@@ -17,7 +17,7 @@ hermes memory setup openviking
 hermes memory status
 ```
 
-The equivalent shorthand is `volcengine/OpenViking#examples/hermes-plugin`.
+The equivalent shorthand is `volcengine/OpenViking/examples/hermes-plugin`.
 Hermes installs this directory as `$HERMES_HOME/plugins/openviking/` and installs
 its `pyproject.toml` dependencies under Hermes's dependency constraints.
 
@@ -27,6 +27,24 @@ Keep `memory.provider: openviking` and your existing configuration. No memory
 data needs to move. Automatic installation after core removal also requires a
 published `openviking` entry in the Hermes catalog; this directory alone does
 not register one.
+
+## Upgrade
+
+For a direct subdirectory installation, use force-reinstallation instead of
+`hermes plugins update openviking`. Hermes does not retain the repository's
+`.git` directory when it installs a subdirectory.
+
+Replace the placeholder with the reviewed OpenViking commit's full 40-character
+SHA, and run this command in the same Hermes profile as the original installation:
+
+```bash
+hermes plugins install 'volcengine/OpenViking/examples/hermes-plugin' \
+  --force --ref '<full-40-character-commit-SHA>' --enable
+```
+
+Existing connection settings and server data are retained. Restart Hermes or
+the gateway after the upgrade. Once the plugin is registered in the Hermes
+catalog, copies installed through the catalog use `hermes plugins update openviking`.
 
 ## Requirements
 
