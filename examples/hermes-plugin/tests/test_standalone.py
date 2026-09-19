@@ -201,3 +201,22 @@ def test_external_provider_forget_fails_closed_without_identity(external_provide
 
     assert "identity" in result["error"].lower()
     assert delete_calls == []
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "viking://user/alice/memories/./x.md",
+        "viking://user/alice/memories/../../user/bob/memories/x.md",
+        "viking://user/alice/memories/%2e/x.md",
+        "viking://user/alice/memories/%2e%2e/x.md",
+        "viking://~/memories/../x.md",
+    ],
+)
+def test_external_provider_rejects_dot_segments_in_forget_uri(external_provider, uri):
+    _, _, module, _ = external_provider("forget-dot-segments")
+
+    resolved, error = module._validate_forget_memory_uri(uri, user_space="alice")
+
+    assert resolved is None
+    assert "dot path segments" in error
