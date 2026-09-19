@@ -223,3 +223,24 @@ def test_external_provider_rejects_other_user_forget_uri(external_provider):
 
     assert resolved is None
     assert "your own memories" in error
+
+
+def test_external_provider_forget_fails_closed_without_identity(external_provider):
+    _, provider, _, _ = external_provider("forget-unverified")
+    delete_calls = []
+
+    class UnverifiedClient:
+        def get(self, _path, **_kwargs):
+            raise RuntimeError("identity probe unavailable")
+
+        def delete(self, path, **kwargs):
+            delete_calls.append((path, kwargs))
+            return {"result": {}}
+
+    provider._client = UnverifiedClient()
+    result = json.loads(
+        provider._tool_forget({"uri": "viking://user/alice/memories/preferences/mem_abc123.md"})
+    )
+
+    assert "identity" in result["error"].lower()
+    assert delete_calls == []
