@@ -179,3 +179,47 @@ def test_cloud_recall_legacy_fallback(external_provider, monkeypatch):
     assert provider._search_prefetch_context("deployment preferences", client=client) == ""
     assert client.post.call_count == 2
     assert "rewrite" not in client.post.call_args.args[1]
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "viking://user/zayn/memories/profile.md",
+        "viking://user/zayn/memories/preferences/mem_abc123.md",
+        "viking://user/zayn/peers/hermes/memories/preferences/mem_abc123.md",
+        "viking://~/memories/profile.md",
+        "viking://~/memories/preferences/mem_abc123.md",
+        "viking://~/peers/hermes/memories/preferences/mem_abc123.md",
+    ],
+)
+def test_external_provider_accepts_canonical_forget_uris(external_provider, uri):
+    _, _, module, _ = external_provider("forget-canonical")
+    user_space = "zayn" if uri.startswith("viking://user/") else None
+
+    assert module._validate_forget_memory_uri(uri, user_space=user_space) == (uri, None)
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "viking://user/memories/preferences/mem_abc123.md",
+        "viking://user/peers/hermes/memories/preferences/mem_abc123.md",
+    ],
+)
+def test_external_provider_rejects_uidless_forget_uris(external_provider, uri):
+    _, _, module, _ = external_provider("forget-uidless")
+
+    resolved, error = module._validate_forget_memory_uri(uri)
+
+    assert resolved is None
+    assert "user memory file URIs" in error
+
+
+def test_external_provider_rejects_other_user_forget_uri(external_provider):
+    _, _, module, _ = external_provider("forget-other-user")
+    uri = "viking://user/someone-else/memories/preferences/mem_abc123.md"
+
+    resolved, error = module._validate_forget_memory_uri(uri, user_space="zayn")
+
+    assert resolved is None
+    assert "your own memories" in error
