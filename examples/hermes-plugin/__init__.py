@@ -2708,10 +2708,11 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
     def _tool_forget(self, args: dict) -> str:
         # _resolve_user_space, not _user_space: its "default" fallback is a guess, not an identity.
-        uri, error = _validate_forget_memory_uri(args.get("uri"), user_space=_resolve_user_space(self._client))
+        client = self._client
+        uri, error = _validate_forget_memory_uri(args.get("uri"), user_space=_resolve_user_space(client))
         if error:
             return tool_error(error)
-        result = self._unwrap_result(self._client.delete("/api/v1/fs", params={"uri": uri, "recursive": False}))
+        result = self._unwrap_result(client.delete("/api/v1/fs", params={"uri": uri, "recursive": False}))
         result = result if isinstance(result, dict) else {}
         payload = {"status": "deleted", "uri": result.get("uri") or uri,
                    **{key: result[key] for key in ("estimated_deleted_count", "memory_cleanup", "semantic_root_uri", "semantic_status", "queue_status") if key in result}}

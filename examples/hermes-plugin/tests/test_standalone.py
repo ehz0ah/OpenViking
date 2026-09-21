@@ -263,3 +263,79 @@ def test_external_provider_rejects_dot_segments_in_forget_uri(external_provider,
 
     assert resolved is None
     assert "dot path segments" in error
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "viking://user/alice/memories/preferences/mem_abc123.md",
+        "viking://~/memories/preferences/mem_abc123.md",
+    ],
+)
+def test_external_provider_forget_keeps_verified_connection(external_provider, uri):
+    _, provider, module, _ = external_provider("forget-connection-snapshot")
+    identity_requested = threading.Event()
+    continue_identity = threading.Event()
+    requests = {"a": [], "b": []}
+
+    def handler_for(server_name):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                requests[server_name].append(("GET", self.path))
+                identity_requested.set()
+                assert continue_identity.wait(timeout=5)
+                self._respond({"status": "ok", "result": {"user": "alice"}})
+
+            def do_DELETE(self):
+                requests[server_name].append(("DELETE", self.path))
+                self._respond({"status": "ok", "result": {"uri": uri}})
+
+            def _respond(self, payload):
+                body = json.dumps(payload).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                pass
+
+        return Handler
+
+    servers = [
+        HTTPServer(("127.0.0.1", 0), handler_for(server_name))
+        for server_name in ("a", "b")
+    ]
+    server_threads = [
+        threading.Thread(target=server.serve_forever, daemon=True) for server in servers
+    ]
+    for server_thread in server_threads:
+        server_thread.start()
+
+    provider._client = module._VikingClient(f"http://127.0.0.1:{servers[0].server_port}")
+    result = []
+    tool_thread = threading.Thread(
+        target=lambda: result.append(provider.handle_tool_call("viking_forget", {"uri": uri}))
+    )
+    tool_thread.start()
+    try:
+        assert identity_requested.wait(timeout=5)
+        provider._client = module._VikingClient(
+            f"http://127.0.0.1:{servers[1].server_port}"
+        )
+        continue_identity.set()
+        tool_thread.join(timeout=5)
+
+        assert not tool_thread.is_alive()
+        assert json.loads(result[0])["status"] == "deleted"
+        assert [method for method, _ in requests["a"]] == ["GET", "DELETE"]
+        assert requests["b"] == []
+    finally:
+        continue_identity.set()
+        tool_thread.join(timeout=5)
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+        for server_thread in server_threads:
+            server_thread.join(timeout=5)
