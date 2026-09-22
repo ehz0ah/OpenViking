@@ -267,6 +267,9 @@ values use the 20,000-token default. The provider also exposes this setting thro
 its configuration schema.
 
 This is a client-side commit trigger. It does not set or replace the server's
-`auto_commit_policy`. It retains the existing `keep_recent_count: 0` commit
-behavior. The threshold is not a hard limit on extraction input: one turn can
+`auto_commit_policy`. If a server policy is enabled, both triggers operate
+independently. Server locking serializes their archive operations, but explicit
+client commits do not use the server scheduler's interval or retention settings.
+The plugin retains the existing `keep_recent_count: 0` commit behavior.
+The threshold is not a hard limit on extraction input: one turn can
 exceed it, and the server may include other context during extraction.

@@ -700,3 +700,199 @@ def test_live_commit_does_not_block_next_turn_or_lose_its_pending_marker(externa
     assert provider._state_path('pending', 'live-sid').exists()
     provider.on_session_end([])
     assert len(commits) == 2
+
+
+@pytest.fixture
+def reload_provider(external_provider, monkeypatch):
+    from unittest.mock import Mock
+
+    home, provider, module, _ = external_provider("connection-reload")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    backends = {name: Mock() for name in ("alice", "bob")}
+    for backend in backends.values():
+        backend.get.return_value = {"result": {"pending_tokens": 20}}
+        backend.post.return_value = {"result": {}}
+
+    class Client:
+        def __init__(self, endpoint, api_key="", *, account="", user="", agent=""):
+            self._conn_snapshot = (endpoint, api_key, account, user, agent)
+            self.get = backends[user].get
+            self.post = backends[user].post
+
+    monkeypatch.setattr(module, "_VikingClient", Client)
+    monkeypatch.setattr(module, "_classify_runtime_openviking_health", lambda *_: ("healthy", ""))
+
+    def reload(user, endpoint="http://127.0.0.1:19531"):
+        monkeypatch.setenv("OPENVIKING_USER", user)
+        monkeypatch.setenv("OPENVIKING_ENDPOINT", endpoint)
+        monkeypatch.setenv("OPENVIKING_API_KEY", "private-test-key")
+        if not provider._env_refresh_enabled:
+            provider.initialize("same-sid", hermes_home=str(home))
+        else:
+            assert provider._ensure_client() is not None
+
+    reload("alice")
+    return home, provider, module, backends, reload
+
+
+def test_upload_client_keeps_published_defaults_until_reload(external_provider, monkeypatch):
+    _, provider, module, _ = external_provider("published-defaults")
+    monkeypatch.setenv("OPENVIKING_USER", "alice")
+    provider._endpoint = "http://127.0.0.1:19531"
+    provider._client = module._VikingClient(provider._endpoint)
+    provider._conn_snapshot = provider._settings_tuple()
+    # /reload can update the environment before the provider sees the change.
+    monkeypatch.setenv("OPENVIKING_USER", "bob")
+    upload_client = provider._new_client()
+    assert upload_client._headers()["X-OpenViking-User"] == "alice"
+
+
+@pytest.mark.parametrize("bob_tokens", [20, 20000])
+@pytest.mark.parametrize("endpoint", ["http://127.0.0.1:19531", "http://127.0.0.1:19532"])
+def test_reload_keeps_new_connection_pending_after_old_commit(reload_provider, monkeypatch, bob_tokens, endpoint):
+    """A's finalizer must neither clear B's work nor suppress B's finalizer."""
+    _, provider, _, backends, reload = reload_provider
+    sid = "same-sid"
+    alice_get = threading.Event()
+    bob_get = threading.Event()
+    release_alice = threading.Event()
+    release_bob = threading.Event()
+    alice_claimed = threading.Event()
+    claim = provider._claim_deferred_sid
+
+    def observe_claim(*args, **kwargs):
+        claimed = claim(*args, **kwargs)
+        if claimed and not kwargs.get("release"):
+            alice_claimed.set()
+        return claimed
+
+    def metadata(started, release, tokens):
+        started.set()
+        assert release.wait(timeout=10)
+        return {"result": {"pending_tokens": tokens}}
+
+    monkeypatch.setattr(provider, "_claim_deferred_sid", observe_claim)
+    backends["alice"].get.side_effect = lambda *_: metadata(alice_get, release_alice, 20000)
+    backends["bob"].get.side_effect = lambda *_: metadata(bob_get, release_bob, bob_tokens)
+    provider.sync_turn("Alice's pending turn", "reply", session_id=sid)
+    try:
+        assert alice_get.wait(timeout=5)
+        alice_marker = provider._state_path("pending", sid)
+        reload("bob", endpoint)
+        provider.sync_turn("Bob's pending turn", "reply", session_id=sid)
+        assert bob_get.wait(timeout=5)
+        bob_marker = provider._state_path("pending", sid)
+        assert bob_marker.exists()
+        # A claims the finalizer while B's metadata request is still pending.
+        release_alice.set()
+        assert alice_claimed.wait(timeout=5)
+    finally:
+        release_alice.set()
+        release_bob.set()
+    assert provider._drain_writers(sid, timeout=5)
+    assert provider._drain_finalizers(timeout=5)
+    assert not alice_marker.exists()
+    if bob_tokens < 20000:
+        assert bob_marker.exists()
+        assert not provider._has_committed_session(sid)
+        assert provider._turn_count == 1
+    else:
+        # B must get its own threshold finalizer while A already owns one.
+        assert provider._has_committed_session(sid)
+        assert not bob_marker.exists()
+    provider.on_session_end([])
+    assert not bob_marker.exists()
+    for backend in backends.values():
+        commits = [c for c in backend.post.call_args_list if c.args[0].endswith("/commit")]
+        assert len(commits) == 1
+        assert commits[0].args == (f"/api/v1/sessions/{sid}/commit", {"keep_recent_count": 0})
+
+
+def test_reload_recovery_preserves_markers_for_other_connections(reload_provider, monkeypatch):
+    """Failed commits survive restart and recover only with matching credentials."""
+    home, provider, module, backends, reload = reload_provider
+    sid = "same-sid"
+    markers = {}
+
+    def fail_commit(path, *_args, **_kwargs):
+        if path.endswith("/commit"):
+            raise RuntimeError("temporary failure")
+        return {}
+
+    for user in ("alice", "bob"):
+        reload(user)
+        backends[user].post.side_effect = fail_commit
+        _finish_turn(provider, user, sid=sid)
+        markers[user] = provider._state_path("pending", sid)
+        provider.on_session_end([])
+        assert markers[user].exists()
+        assert not provider._has_committed_session(sid)
+        assert "private-test-key" not in markers[user].read_text()
+    assert markers["alice"] != markers["bob"]
+    provider.shutdown()
+
+    for backend in backends.values():
+        backend.post.side_effect = None
+        backend.post.reset_mock()
+    for user in ("bob", "alice"):
+        monkeypatch.setenv("OPENVIKING_USER", user)
+        recovered = module.OpenVikingMemoryProvider()
+        try:
+            recovered.initialize("new-sid", hermes_home=str(home))
+            assert recovered._drain_finalizers(timeout=5)
+            assert not markers[user].exists()
+            backends[user].post.assert_called_once_with(f"/api/v1/sessions/{sid}/commit", {"keep_recent_count": 0})
+            if user == "bob":
+                assert markers["alice"].exists()
+                backends["alice"].post.assert_not_called()
+        finally:
+            recovered.shutdown()
+
+
+def test_reload_back_to_original_identity_keeps_new_generation_pending(reload_provider):
+    _, provider, _, backends, reload = reload_provider
+    sid = "same-sid"
+    first_get = threading.Event()
+    release_first = threading.Event()
+    later_get = threading.Event()
+    bob_get = threading.Event()
+
+    def alice_metadata(*_args):
+        if not first_get.is_set():
+            first_get.set()
+            assert release_first.wait(timeout=10)
+            return {"pending_tokens": 20000}
+        later_get.set()
+        return {"pending_tokens": 20}
+
+    def bob_metadata(*_args):
+        bob_get.set()
+        return {"pending_tokens": 20}
+
+    backends["alice"].get.side_effect = alice_metadata
+    backends["bob"].get.side_effect = bob_metadata
+    provider.sync_turn("old Alice turn", "reply", session_id=sid)
+    try:
+        assert first_get.wait(timeout=5)
+        old_marker = provider._state_path("pending", sid)
+        reload("bob")
+        provider.sync_turn("Bob turn", "reply", session_id=sid)
+        assert bob_get.wait(timeout=5)
+        bob_marker = provider._state_path("pending", sid)
+        reload("alice")
+        provider.sync_turn("new Alice turn", "reply", session_id=sid)
+        assert later_get.wait(timeout=5)
+        new_marker = provider._state_path("pending", sid)
+    finally:
+        release_first.set()
+    assert provider._drain_writers(sid, timeout=5)
+    assert provider._drain_finalizers(timeout=5)
+    assert not old_marker.exists()
+    assert new_marker.exists() and bob_marker.exists()
+    assert not provider._has_committed_session(sid)
+    assert provider._turn_count == 1
+    provider.on_session_end([])
+    assert not new_marker.exists()
+    assert bob_marker.exists()
+    commits = [c for c in backends["alice"].post.call_args_list if c.args[0].endswith("/commit")]
+    assert len(commits) == 2
