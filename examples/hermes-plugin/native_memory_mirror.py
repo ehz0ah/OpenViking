@@ -1,8 +1,8 @@
 """Stable mirroring for Hermes native MEMORY.md / USER.md entries.
 
-Hermes' built-in memory tool identifies entries by unique text substrings rather
-than durable IDs. OpenViking, by contrast, needs an exact ``viking://`` file URI
-to update or delete a memory safely. This module keeps the missing identity map
+Hermes' built-in memory tool selects entries by text and reports their full
+previous content after a committed write. OpenViking needs an exact ``viking://``
+file URI to update or delete a memory safely. This module keeps the identity map
 in a small profile-scoped registry and serializes mirror operations through one
 FIFO worker.
 
@@ -212,19 +212,22 @@ class NativeMemoryMirror:
         *,
         connection: str,
         target: str,
-        old_text: str,
+        previous_content: Any,
         action: str,
     ) -> tuple[int, Dict[str, str]]:
-        old_text = str(old_text or "").strip()
-        if not old_text:
-            raise _MappingError(f"{action} requires old_text for stable URI resolution")
+        if not isinstance(previous_content, str) or not previous_content:
+            raise _MappingError(
+                f"{action} requires authoritative previous_content from Hermes; "
+                "upgrade Hermes to a version with committed-entry metadata; "
+                "leaving OpenViking unchanged"
+            )
 
         matches = [
             (index, entry)
             for index, entry in enumerate(registry["entries"])
             if entry["connection"] == connection
             and entry["target"] == target
-            and old_text in entry["content"]
+            and previous_content == entry["content"]
         ]
         if not matches:
             raise _MappingError(
@@ -237,6 +240,19 @@ class NativeMemoryMirror:
                 f"target={target!r}; leaving OpenViking unchanged"
             )
         return matches[0]
+
+    @staticmethod
+    def _warn_failed_indexing(result: Dict[str, Any], uri: str) -> None:
+        failed = [
+            name for name in ("semantic_status", "vector_status") if result.get(name) == "failed"
+        ]
+        if failed:
+            logger.warning(
+                "OpenViking memory file updated at %s, but indexing failed (%s); "
+                "search results may be stale. The URI mapping was retained.",
+                uri,
+                ", ".join(failed),
+            )
 
     def _apply(self, event: Dict[str, Any]) -> None:
         path = self._registry_path()
@@ -276,6 +292,8 @@ class NativeMemoryMirror:
                 {"uri": requested_uri, "content": content, "mode": "create"},
             )
             result = response.get("result", {}) if isinstance(response, dict) else {}
+            if isinstance(result, dict) and result.get("content_updated") is False:
+                raise RuntimeError("OpenViking memory file was not updated")
             canonical_uri = (
                 str(result.get("uri") or "").strip() if isinstance(result, dict) else ""
             ) or requested_uri
@@ -288,23 +306,27 @@ class NativeMemoryMirror:
                 }
             )
             self._save_registry(path, registry)
+            if isinstance(result, dict):
+                self._warn_failed_indexing(result, canonical_uri)
             return
 
-        old_text = metadata.get("old_text")
         index, mapping = self._resolve_mapping(
             registry,
             connection=connection,
             target=target,
-            old_text=str(old_text or ""),
+            previous_content=metadata.get("previous_content"),
             action=action,
         )
         uri = mapping["uri"]
 
         if action == "replace":
-            client.post(
+            response = client.post(
                 "/api/v1/content/write",
                 {"uri": uri, "content": content, "mode": "replace", "wait": True},
             )
+            result = response.get("result", {}) if isinstance(response, dict) else {}
+            if isinstance(result, dict) and result.get("content_updated") is False:
+                raise RuntimeError("OpenViking memory file was not updated")
             registry["entries"][index] = {
                 "connection": connection,
                 "target": target,
@@ -312,6 +334,8 @@ class NativeMemoryMirror:
                 "content": content,
             }
             self._save_registry(path, registry)
+            if isinstance(result, dict):
+                self._warn_failed_indexing(result, uri)
             return
 
         client.delete(

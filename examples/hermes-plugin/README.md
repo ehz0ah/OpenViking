@@ -215,8 +215,8 @@ order. The active profile records each mirrored entry's exact URI in
 | Hermes action | OpenViking operation |
 |---------------|----------------------|
 | `add` | Create a file under user memory or the configured peer, then record its URI |
-| `replace` | Match `target` and `old_text` in the registry, update the same URI, and wait for semantic/vector refresh |
-| `remove` | Match `target` and `old_text` in the registry, delete that exact URI, and wait for semantic cleanup |
+| `replace` | Match the committed event's full previous content and target, update the same URI, and wait for semantic/vector refresh |
+| `remove` | Match the committed event's full previous content and target, delete that exact URI, and wait for semantic cleanup |
 
 The registry stores the current entry text and a connection fingerprint, not
 the raw API key. Endpoint, credentials, user, account, and peer changes isolate
@@ -224,13 +224,23 @@ the new connection from earlier mappings. New files require a server-confirmed
 user identity. Missing or ambiguous mappings block replacement and deletion
 with a warning; the plugin never selects a target by semantic similarity.
 
+Replacement and deletion require Hermes to provide authoritative
+`previous_content` metadata from the native-store commit. Older Hermes versions
+without this event contract skip those mirror operations with a warning; native
+local memory still changes. The plugin never falls back to matching the caller's
+`old_text` against its partial registry.
+The required event contract is provided by
+[Hermes PR #118903](https://github.com/NousResearch/hermes-agent/pull/118903).
+
 Only entries created by this mirror have mappings. Session-extracted memories,
 explicit `viking_remember` results, and copies created before this registry are
 outside its scope. Use `viking_forget` with an exact URI to remove those copies.
 
-The mirror is asynchronous. Hermes saves its local memory first. Remote failures
-leave the registry unchanged and produce a warning, but there is no durable
-replay. A remote mutation followed by a failed registry save can also cause
+The mirror is asynchronous. Hermes saves its local memory first. Rejected remote
+writes leave the registry unchanged and produce a warning. If the file changes
+but indexing fails, the registry retains the new content and exact URI; a warning
+reports the indexing failure because search results may be stale. There is no
+durable replay. A remote mutation followed by a failed registry save can also cause
 drift. Operations are ordered per provider; registry updates are serialized
 across instances sharing a profile in one process, not across processes.
 

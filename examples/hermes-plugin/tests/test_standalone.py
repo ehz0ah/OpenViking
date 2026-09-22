@@ -59,9 +59,12 @@ def test_external_native_memory_lifecycle_survives_restart(external_provider, ta
         provider._ensure_client = provider._new_client = lambda: client
         manager = MemoryManager()
         manager.add_provider(provider)
-        manager.notify_memory_tool_write(
-            {"success": True}, {"target": target, "operations": [operation]}
-        )
+        result = {"success": True}
+        if index == 1:
+            result["replaced_entries"] = {1: "Preferred shell is zsh"}
+        elif index == 2:
+            result["removed_entries"] = {1: "Preferred shell is fish"}
+        manager.notify_memory_tool_write(result, {"target": target, "operations": [operation]})
         provider.shutdown()
         registry = json.loads((home / "openviking/memory_mirror_registry.json").read_text())
         if index == 0:

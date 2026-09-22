@@ -115,7 +115,7 @@ def test_replace_updates_the_same_openviking_uri_and_registry(mirror):
         "replace",
         "user",
         "Preferred provider is OpenRouter",
-        metadata={"old_text": "DeepInfra"},
+        metadata={"old_text": "DeepInfra", "previous_content": "Preferred provider is DeepInfra"},
     )
     _wait_for(lambda: len(client.snapshot()) == 2)
 
@@ -203,7 +203,7 @@ def test_remove_deletes_exact_mapped_uri_and_registry_entry(mirror):
         "remove",
         "memory",
         "",
-        metadata={"old_text": "alpha is active"},
+        metadata={"old_text": "alpha is active", "previous_content": "Project alpha is active"},
     )
     _wait_for(lambda: len(client.snapshot()) == 2)
 
@@ -233,7 +233,10 @@ def test_mapping_survives_provider_restart_for_true_replace(mirror):
         "replace",
         "user",
         "Employment status is employed",
-        metadata={"old_text": "job seeking"},
+        metadata={
+            "old_text": "job seeking",
+            "previous_content": "Employment status is job seeking",
+        },
     )
     _wait_for(lambda: len(client.snapshot()) == 2)
 
@@ -254,13 +257,13 @@ def test_rapid_add_replace_remove_is_processed_in_fifo_order(mirror):
         "replace",
         "user",
         "Device owned: Tablet B",
-        metadata={"old_text": "Tablet A"},
+        metadata={"old_text": "Tablet A", "previous_content": "Device owned: Tablet A"},
     )
     provider.on_memory_write(
         "remove",
         "user",
         "",
-        metadata={"old_text": "Tablet B"},
+        metadata={"old_text": "Tablet B", "previous_content": "Device owned: Tablet B"},
     )
 
     _wait_for(lambda: len(client.snapshot()) == 3)
@@ -292,7 +295,10 @@ def test_unmapped_replace_fails_closed_with_warning(mirror, caplog):
             "replace",
             "user",
             "Employment status is employed",
-            metadata={"old_text": "job seeking"},
+            metadata={
+                "old_text": "job seeking",
+                "previous_content": "Employment status is job seeking",
+            },
         )
         provider.shutdown()
 
@@ -308,16 +314,24 @@ def test_ambiguous_replace_fails_closed_without_guessing(mirror, caplog):
     provider.on_memory_write("add", "user", "Device owned: Tablet B")
     _wait_for(lambda: len(client.snapshot()) == 2)
 
+    provider.on_memory_write(
+        "replace",
+        "user",
+        "Device owned: Tablet B",
+        metadata={"previous_content": "Device owned: Tablet A"},
+    )
+    _wait_for(lambda: len(client.snapshot()) == 3)
+
     with caplog.at_level("WARNING", logger="plugins.memory.openviking"):
         provider.on_memory_write(
             "replace",
             "user",
             "Device owned: Tablet C",
-            metadata={"old_text": "Tablet"},
+            metadata={"old_text": "Tablet", "previous_content": "Device owned: Tablet B"},
         )
         provider.shutdown()
 
-    assert len(client.snapshot()) == 2
+    assert len(client.snapshot()) == 3
     assert any("matched 2 OpenViking URI mappings" in record.message for record in caplog.records)
 
 
@@ -387,7 +401,7 @@ def test_failed_replace_keeps_previous_registry_mapping(mirror, caplog):
             "replace",
             "user",
             "Preferred shell is fish",
-            metadata={"old_text": "zsh"},
+            metadata={"old_text": "zsh", "previous_content": "Preferred shell is zsh"},
         )
         _wait_for(lambda: len(client.snapshot()) == 2)
         provider.shutdown()
@@ -409,7 +423,7 @@ def test_failed_remove_keeps_registry_mapping(mirror, caplog):
             "remove",
             "memory",
             "",
-            metadata={"old_text": "delta is active"},
+            metadata={"old_text": "delta is active", "previous_content": "Project delta is active"},
         )
         _wait_for(lambda: len(client.snapshot()) == 2)
         provider.shutdown()
@@ -471,7 +485,7 @@ def test_registry_mapping_is_isolated_by_connection(mirror):
         "replace",
         "user",
         "Preferred editor is Neovim",
-        metadata={"old_text": "Helix"},
+        metadata={"old_text": "Helix", "previous_content": "Preferred editor is Helix"},
     )
     _wait_for(lambda: len(first_client.snapshot()) == 2)
 
@@ -571,3 +585,26 @@ def test_concurrent_first_writes_share_one_mirror_worker(mirror, monkeypatch):
 
     assert constructed == 1
     provider.shutdown()
+
+
+@pytest.mark.parametrize("action", ["add", "replace"])
+def test_explicitly_unwritten_content_does_not_advance_registry(mirror, caplog, action):
+    client = _FakeVikingClient()
+    provider = mirror.provider(client)
+    path = _registry_path(mirror.home)
+    if action == "replace":
+        provider.on_memory_write("add", "user", "Prefers tea")
+        _wait_for(path.exists)
+    before = path.read_bytes() if path.exists() else None
+
+    def no_write(path, payload):
+        return {"status": "ok", "result": {"uri": payload["uri"], "content_updated": False}}
+
+    client.post = no_write
+    with caplog.at_level("WARNING", logger="plugins.memory.openviking"):
+        provider.on_memory_write(
+            action, "user", "Prefers coffee", metadata={"previous_content": "Prefers tea"}
+        )
+        provider.shutdown()
+    assert (path.read_bytes() if path.exists() else None) == before
+    assert any("file was not updated" in record.message for record in caplog.records)

@@ -52,8 +52,15 @@ install or package the OpenViking server.
 
 ## Validation
 
-Use a Hermes checkout with its development dependencies installed. From that
-checkout, run its canonical test runner against this directory:
+Use a Hermes checkout with its development dependencies installed.
+
+The complete mirror tests require the committed-entry event contract from
+[Hermes PR #118903](https://github.com/NousResearch/hermes-agent/pull/118903):
+`MemoryManager` forwards `previous_content` for each successful replace/remove.
+The legacy compatibility tests verify that missing metadata skips these remote
+mutations. Do not substitute a guessed match in tests or production.
+
+From that checkout, run its canonical test runner against this directory:
 
 ```bash
 PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}" HERMES_TEST_FILE_RETRIES=0 \
