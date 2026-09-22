@@ -160,7 +160,7 @@ def initialize(
 
 
 @pytest.mark.parametrize("compress", ["off", "server"])
-@pytest.mark.parametrize("scope", ["configured", "shared", "peer"])
+@pytest.mark.parametrize("scope", [None, "shared", "peer"])
 def test_gateway_capture_commit_and_sender_scoped_recall(
     external_provider, monkeypatch, scope, compress
 ):
@@ -364,9 +364,9 @@ def test_older_hooks_and_no_gateway_sender(external_provider, monkeypatch, platf
 def test_recall_scope_default_and_environment_override(external_provider, monkeypatch):
     _, provider, module, _ = external_provider("config")
     schema = {field["key"]: field for field in provider.get_config_schema()}
-    assert schema["recall_scope"]["choices"] == ["configured", "shared", "peer"]
-    assert module.OpenVikingMemoryProvider._setting("recall_scope", {}) == "configured"
+    assert schema["recall_scope"]["choices"] == ["shared", "peer"]
+    assert module.OpenVikingMemoryProvider._setting("recall_scope", {}) is None
     monkeypatch.setenv("OPENVIKING_RECALL_SCOPE", "peer")
     assert provider._setting("recall_scope", {"recall_scope": "shared"}) == "peer"
     monkeypatch.delenv("OPENVIKING_RECALL_SCOPE")
-    assert provider._setting("recall_scope", {"recall_scope": "invalid"}) == "configured"
+    assert provider._setting("recall_scope", {"recall_scope": "invalid"}) is None

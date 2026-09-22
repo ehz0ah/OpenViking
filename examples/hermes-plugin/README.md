@@ -89,6 +89,24 @@ The setup can link to an existing `~/.openviking/ovcli.conf`, copy its current
 connection values into Hermes, or create a minimal `ovcli.conf` when one does
 not exist.
 
+Setup first asks how the Hermes instance is used:
+
+| Preset | Hermes conversation history | OpenViking long-term recall |
+|--------|-----------------------------|-----------------------------|
+| **Personal Agent** | Keeps existing group/thread session settings | Common memory and the current sender's memory (`peer`) |
+| **Shared Agent** | Shares each group or thread session between its participants | Common memory and all sender memories under the same OpenViking user (`shared`) |
+
+Shared Agent requires confirmation before it sets `group_sessions_per_user` and
+`thread_sessions_per_user` to `false`. Different groups still have separate
+conversation histories. Restart the gateway to apply changed session settings.
+Personal Agent does not make an already shared conversation private.
+
+Both presets retain sender attribution during capture. After commit and
+extraction, OpenViking can recall those memories across chats according to the
+chosen scope. Upgrading the plugin alone does not apply a preset or change
+session settings. Rerunning setup preselects the saved recall choice; a new
+setup starts on Personal Agent.
+
 Or manually:
 
 ```bash
@@ -175,7 +193,8 @@ user stay unchanged. Assistant messages keep the configured `agent` peer.
 CLI messages without a gateway sender keep their existing user-level attribution.
 Existing memories are not moved.
 
-Choose the automatic recall scope in the active profile's `config.yaml`:
+The setup presets save the automatic recall scope. You can also set it in the
+active profile's `config.yaml`:
 
 ```yaml
 memory:
@@ -185,12 +204,19 @@ memory:
 
 | Value | Automatic recall |
 |-------|------------------|
-| `configured` (default) | Preserves the current server requests and configured assistant identity. List recall uses the server's normal actor view; context compression keeps its existing server default. |
 | `shared` | Common memory and all peer memories under the same OpenViking user. |
 | `peer` | Common memory and the current gateway sender's memory. With no sender, only common memory is recalled. |
 
-`OPENVIKING_RECALL_SCOPE` overrides YAML. Invalid values warn and use
-`configured`. The configuration schema also exposes this option. A stable
+With no scope set, the provider preserves the previous requests: normally
+shared recall, but an explicitly configured assistant peer can narrow list
+recall. Existing compression behavior is also retained. This is compatibility
+handling for existing installations, not a third setup mode. Invalid values
+warn and preserve that behavior.
+
+`OPENVIKING_RECALL_SCOPE` overrides YAML. On successful setup, the wizard removes
+this override from the profile's `.env` so the selected preset takes effect.
+An override supplied again by a service or shell still takes precedence.
+The configuration schema exposes only `shared` and `peer`. A stable
 alternate sender ID is used when Hermes supplies one; unsafe IDs are encoded
 to valid peer IDs. Queued captures retain their own sender when another
 participant sends a turn.
@@ -202,7 +228,9 @@ resources and, in `peer` mode, the sender's resources.
 
 This is a retrieval setting, not an access-control boundary. It does not filter
 shared conversation history or change explicit `viking_*` tools, native memory
-mirroring, credentials, or gateway group-session settings. Explicit tools retain
+mirroring, or credentials. Setting `recall_scope` alone does not change gateway
+sessions; the confirmed Shared Agent setup preset applies those settings.
+Explicit tools retain
 the configured assistant view. Use separate OpenViking users and credentials
 when participants require separate access rights.
 
