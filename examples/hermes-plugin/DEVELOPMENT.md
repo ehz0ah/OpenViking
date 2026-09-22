@@ -64,9 +64,15 @@ PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}" HERMES_TEST_FILE_RETRIES=0 \
 `--confcutdir` keeps pytest from importing the plugin as a test package before
 Hermes loads it under its own namespace. The tests use temporary profile homes
 and remove bundled-provider discovery.
-They check external loading across profiles, HTTP tool dispatch, and cancelled
-setup without changing existing configuration. Run the upstream OpenViking
-provider tests in Hermes as well when changing provider behavior:
+They cover external loading, profile isolation, setup, tools, session commits,
+and native memory mirroring. The mirror suite includes ordered writes, restart
+continuity, registry failures, connection isolation, and concurrent workers.
+Provider-specific regression tests belong here and must use the shared external
+loader fixture. Generic Hermes framework tests remain in Hermes.
+
+For compatibility checks while Hermes still bundles OpenViking, also run its
+provider tests. These load the bundled copy unless explicitly routed through the
+external loader; they do not replace this directory's tests:
 
 ```bash
 HERMES_TEST_FILE_RETRIES=0 scripts/run_tests.sh \
