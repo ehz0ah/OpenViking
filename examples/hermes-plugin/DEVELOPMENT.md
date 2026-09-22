@@ -23,6 +23,14 @@ The active-session commit lifecycle was ported from
 with the original author retained. The OpenViking adaptation uses a configurable
 pending-token threshold instead of the original six-turn trigger.
 
+Gateway sender attribution and recall scope adapt
+[Hermes PR #105812](https://github.com/NousResearch/hermes-agent/pull/105812),
+including liuhao1024's capture change from
+[PR #98506](https://github.com/NousResearch/hermes-agent/pull/98506), with the
+original author retained. The adaptation uses Hermes's existing per-turn author
+hooks and preserves the configured recall behavior by default. It does not
+change gateway session configuration or require a Hermes core patch.
+
 ## Migration coordination
 
 After this directory is merged, submit a Hermes catalog entry with:
@@ -57,7 +65,10 @@ PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}" HERMES_TEST_FILE_RETRIES=0 \
 Hermes loads it under its own namespace. The tests use temporary profile homes
 and remove bundled-provider discovery.
 They check external loading across profiles, HTTP tool dispatch, and cancelled
-setup without changing existing configuration. Run the upstream OpenViking
+setup without changing existing configuration. Gateway tests use mock events
+through Hermes's turn hooks and memory manager. They cover sender changes,
+capture retries, commits, recall scopes, compression fallback, and missing
+sender metadata. Run the upstream OpenViking
 provider tests in Hermes as well when changing provider behavior:
 
 ```bash

@@ -28,6 +28,7 @@ import time
 import uuid
 import zipfile
 from contextlib import suppress
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
@@ -89,6 +90,8 @@ _CONFIG_SCHEMA = [
     _cfg_field("account", "Advanced local identity override (leave blank for user API keys)"),
     _cfg_field("user", "Advanced local user override (leave blank for user API keys)"),
     _cfg_field("agent", "Optional peer ID for separate assistant context. Uses user memory when no peer is configured.", default=_DEFAULT_AGENT),
+    _cfg_field("recall_scope", "Automatic recall: configured assistant view, all peers (shared), or current sender (peer)",
+               type="string", choices=["configured", "shared", "peer"], default="configured"),
     _cfg_field(
         "recall_compress",
         "Cloud recall compression: off, server or auto (no local compressor)",
@@ -147,6 +150,18 @@ _LEGACY_RECOVERY_LOCK_FILENAME = "legacy-recovery.lock"
 _LOCK_BUSY_ERRNOS = {errno.EWOULDBLOCK, errno.EACCES, errno.EAGAIN}
 _INVALID_SETTING_WARNINGS: Set[tuple[str, str]] = set()
 _INVALID_SETTING_WARNINGS_LOCK = threading.Lock()
+
+
+def _gateway_peer_id(platform: str, sender: Any) -> str:
+    """Namespace transport IDs and encode path-like IDs without merging distinct senders."""
+    platform, sender = str(platform or "").strip().lower(), str(sender or "").strip()
+    if not platform or not sender:
+        return ""
+    raw = f"{platform}.{sender}"
+    if len(raw) <= 128 and re.fullmatch(r"[a-zA-Z0-9_.@-]+", raw) and raw.count("@") <= 1:
+        return raw
+    prefix = re.sub(r"[^a-zA-Z0-9_.-]+", "-", raw).strip(".-")[:100]
+    return f"{prefix}-{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:24]}"
 
 
 @dataclass(frozen=True)
@@ -1251,6 +1266,10 @@ class OpenVikingMemoryProvider(MemoryProvider):
         self._endpoint = self._api_key = self._account = self._user = self._agent = ""
         # The gateway sender is a peer within the configured OpenViking user.
         self._user_id = ""
+        self._gateway_platform = self._gateway_user_id = self._gateway_user_id_alt = ""
+        # Hermes copies the calling context into recall/sync workers. A later
+        # speaker must not change an earlier queued turn's identity.
+        self._turn_peer: ContextVar[Optional[str]] = ContextVar("openviking_turn_peer", default=None)
         self._session_id, self._turn_count, self._hermes_home = "", 0, ""
         # (conn snapshot, user): keyed on the snapshot so every client built from it
         # shares the resolved user and a /reload invalidates it.
@@ -1472,7 +1491,11 @@ class OpenVikingMemoryProvider(MemoryProvider):
         self._env_refresh_enabled = True
         self._session_id = session_id
         self._turn_count = 0
-        self._user_id = str(kwargs.get("user_id") or "").strip()
+        self._gateway_platform = str(kwargs.get("platform") or "").strip().lower()
+        self._gateway_user_id = str(kwargs.get("user_id") or "").strip()
+        self._gateway_user_id_alt = str(kwargs.get("user_id_alt") or "").strip()
+        self._user_id = _gateway_peer_id(self._gateway_platform, self._gateway_user_id_alt or self._gateway_user_id)
+        self._turn_peer.set(None)
         self._hermes_home = str(kwargs.get("hermes_home") or "").strip() or str(get_hermes_home())
         self._acquire_run_lock()
         self._profile_prefetched_sessions.clear()
@@ -1583,6 +1606,19 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
     # -- prompt / prefetch ---------------------------------------------------
 
+    def _sender_peer(self, author_id: Any) -> str:
+        sender = str(author_id or "").strip()
+        if sender and sender in {self._gateway_user_id, self._gateway_user_id_alt}:
+            sender = self._gateway_user_id_alt or sender
+        return _gateway_peer_id(self._gateway_platform, sender)
+
+    def on_turn_start(self, turn_number: int, message: str, **kwargs) -> None:
+        self._turn_peer.set(self._sender_peer(kwargs["author_id"]) if "author_id" in kwargs else self._user_id)
+
+    def _current_sender_peer(self) -> str:
+        current = self._turn_peer.get()
+        return self._user_id if current is None else current
+
     def system_prompt_block(self) -> str:
         if not self._ensure_client():
             return ""
@@ -1638,9 +1674,12 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
     @classmethod
     def _post_prefetch_search(cls, client: _VikingClient, query: str, session_id: str, *, limit: int,
-                              context_type: str | List[str], deadline: float, request_timeout: float) -> dict:
+                              context_type: str | List[str], deadline: float, request_timeout: float,
+                              target_uri: Optional[List[str]] = None) -> dict:
         """Session-aware search first, falling back to search/find (budget errors propagate)."""
         base_payload = {"query": query, "limit": limit, "score_threshold": 0, "context_type": context_type}
+        if target_uri:
+            base_payload["target_uri"] = target_uri
         if session_id:
             try:
                 return client.post("/api/v1/search/search", {**base_payload, "session_id": session_id},
@@ -1653,6 +1692,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
     def _search_prefetch_context(self, query: str, *, session_id: str = "", client: Optional[_VikingClient] = None) -> str:
         query_text = (query or "").strip()
+        sender_peer = self._current_sender_peer()
         if len(query_text) < _RECALL_QUERY_MIN_CHARS:
             return ""
         try:
@@ -1670,7 +1710,29 @@ class OpenVikingMemoryProvider(MemoryProvider):
         try:
             cfg = self._recall_config()
             deadline = time.monotonic() + cfg["timeout_seconds"]
-            if cfg["compress"] in ("server", "auto"):
+            scope = cfg["scope"]
+            target_uri = None
+            if scope != "configured":
+                endpoint, api_key, account, user, _agent = client._conn_snapshot
+                client = _VikingClient(endpoint, api_key, account=account, user=user,
+                                       agent=sender_peer if scope == "peer" else "")
+            if scope == "peer":
+                # Explicit roots also constrain fallback searches when there is
+                # no sender. An actor-less user-root search includes all peers.
+                user = _resolve_user_space(client, timeout=self._remaining_recall_timeout(deadline, cfg["request_timeout_seconds"]))
+                if not user:
+                    return ""
+                user_root = f"viking://user/{user}"
+                target_uri = [f"{user_root}/memories"]
+                if sender_peer:
+                    target_uri.append(f"{user_root}/peers/{sender_peer}/memories")
+                if cfg["resources"]:
+                    target_uri += [f"{user_root}/resources", "viking://resources"]
+                    if sender_peer:
+                        target_uri.append(f"{user_root}/peers/{sender_peer}/resources")
+            # Without an actor, context-mode resource defaults include peers.
+            # Use scoped list recall for that case, even with compression on.
+            if cfg["compress"] in ("server", "auto") and (scope != "peer" or sender_peer):
                 payload = {
                     "query": query_text,
                     "mode": "context",
@@ -1682,6 +1744,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 }
                 if session_id:
                     payload["session_id"] = session_id
+                if scope != "configured":
+                    payload["peer_scope"] = "actor" if scope == "peer" else "all"
                 try:
                     assembled = self._unwrap_result(
                         client.post(
@@ -1695,6 +1759,10 @@ class OpenVikingMemoryProvider(MemoryProvider):
                     if isinstance(assembled, dict) and any(
                         k in assembled for k in ("rendered", "digest", "entries")
                     ):
+                        if scope == "peer" and (assembled.get("stats") or {}).get("peer_scope") != "actor":
+                            # Older servers may ignore an unknown field. Never
+                            # inject a digest whose sender scope is unconfirmed.
+                            raise ValueError("OpenViking did not confirm actor-scoped context")
                         if (assembled.get("stats") or {}).get("rewrite") == "no_relevant":
                             return ""
                         return str(
@@ -1715,6 +1783,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
                     context_type=["memory", "resource"] if cfg["resources"] else "memory",
                     deadline=deadline,
                     request_timeout=cfg["request_timeout_seconds"],
+                    target_uri=target_uri,
                 )
             )
             if not isinstance(result, dict):
@@ -1767,7 +1836,9 @@ class OpenVikingMemoryProvider(MemoryProvider):
             value, source = env_value, spec["env_var"]
         else:
             value, source = provider_config.get(key, default), f"memory.openviking.{key}"
-        parsed = cls._parse_setting_value(value, spec["type"])
+        parsed = str(value).strip().lower() if "choices" in spec else cls._parse_setting_value(value, spec["type"])
+        if "choices" in spec and parsed not in spec["choices"]:
+            parsed = None
         if parsed is None:
             warning_key = (source, repr(value))
             with _INVALID_SETTING_WARNINGS_LOCK:
@@ -2146,7 +2217,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
         return payload_messages
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "",
-                  messages: Optional[List[Dict[str, Any]]] = None) -> None:
+                  messages: Optional[List[Dict[str, Any]]] = None,
+                  turn_author: Optional[Dict[str, Any]] = None) -> None:
         """Record the conversation turn in OpenViking's session (non-blocking)."""
         if not self._ensure_client():
             return
@@ -2162,7 +2234,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 return
             client = self._new_client()
             assistant_peer_id = self._agent
-            user_peer_id = self._user_id
+            user_peer_id = self._sender_peer(turn_author.get("id")) if isinstance(turn_author, dict) else self._current_sender_peer()
 
         turn_messages = [dict(m) for m in (self._extract_current_turn_messages(messages, user_content, assistant_content) if messages is not None else [])]
         for message in turn_messages:

@@ -167,6 +167,45 @@ Set `agent: hermes` to restore peer-scoped writes. Memories written at user
 scope before this change stay there and remain searchable. This setting
 changes future writes, not the location of existing memories.
 
+### Gateway senders and automatic recall
+
+The external provider attaches the current gateway sender to captured user
+messages as a peer, for example `telegram.123456`. The OpenViking account and
+user stay unchanged. Assistant messages keep the configured `agent` peer.
+CLI messages without a gateway sender keep their existing user-level attribution.
+Existing memories are not moved.
+
+Choose the automatic recall scope in the active profile's `config.yaml`:
+
+```yaml
+memory:
+  openviking:
+    recall_scope: peer
+```
+
+| Value | Automatic recall |
+|-------|------------------|
+| `configured` (default) | Preserves the current server requests and configured assistant identity. List recall uses the server's normal actor view; context compression keeps its existing server default. |
+| `shared` | Common memory and all peer memories under the same OpenViking user. |
+| `peer` | Common memory and the current gateway sender's memory. With no sender, only common memory is recalled. |
+
+`OPENVIKING_RECALL_SCOPE` overrides YAML. Invalid values warn and use
+`configured`. The configuration schema also exposes this option. A stable
+alternate sender ID is used when Hermes supplies one; unsafe IDs are encoded
+to valid peer IDs. Queued captures retain their own sender when another
+participant sends a turn.
+
+The scope applies to automatic query recall, including compression and search
+fallbacks. If an older server cannot confirm sender-scoped compression, the
+provider uses scoped list recall. Enabled resource recall includes common
+resources and, in `peer` mode, the sender's resources.
+
+This is a retrieval setting, not an access-control boundary. It does not filter
+shared conversation history or change explicit `viking_*` tools, native memory
+mirroring, credentials, or gateway group-session settings. Explicit tools retain
+the configured assistant view. Use separate OpenViking users and credentials
+when participants require separate access rights.
+
 ## Tools
 
 | Tool | Description |
