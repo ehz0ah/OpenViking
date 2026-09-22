@@ -34,8 +34,8 @@ def _select_usage_profile(select, cancelled, provider_config: dict) -> str | obj
     while True:
         choice = select(
             "  OpenViking usage profile",
-            [("Personal Agent", "recall common memory and the current sender; keep session settings"),
-             ("Shared Agent", "share group/thread history and recall memory from all senders")],
+            [("Personal Agent", "recall common and sender memory; keep sessions"),
+             ("Shared Agent", "share history and recall all senders")],
             default=default, cancel_returns=cancelled,
         )
         if choice == cancelled:
@@ -44,15 +44,24 @@ def _select_usage_profile(select, cancelled, provider_config: dict) -> str | obj
             return _PERSONAL_PROFILE
         if choice != 1:
             continue
-        _say("Shared Agent shares conversation history between participants in each group or thread.")
-        _say("Long-term recall can use common memory and all sender memories under this OpenViking user, across chats.")
-        _say("Different groups still have separate conversation histories.")
-        confirm = select(
-            "  Confirm Shared Agent",
-            [("Apply Shared Agent", "enable shared group/thread sessions and shared recall"),
-             ("Go back", "choose a different usage profile"), _CANCEL_OPTION],
-            default=1, cancel_returns=cancelled,
+        from hermes_cli.curses_ui import curses_radiolist
+        from hermes_cli.memory_setup import _clear_interactive_transition
+
+        description = (
+            "  Participants share conversation history within each group or thread.\n"
+            "  Different groups keep separate conversation histories.\n"
+            "  Recall includes common memory and all senders under this\n"
+            "  OpenViking user, across chats."
         )
+        print(description, flush=True)  # Also visible with Hermes's numbered fallback.
+        confirm = curses_radiolist(
+            "  Confirm Shared Agent",
+            ["Apply Shared Agent", "Go back - choose a different usage profile",
+             "Cancel setup - no changes saved"],
+            selected=1, cancel_returns=cancelled,
+            description=description,
+        )
+        _clear_interactive_transition()
         if confirm == 0:
             return _SHARED_PROFILE
         if confirm != 1:

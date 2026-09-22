@@ -7,6 +7,15 @@ import pytest
 import yaml
 
 
+def patch_menu(monkeypatch, select):
+    from hermes_cli import curses_ui
+
+    def radio(title, options, *, selected=0, **kwargs):
+        return select(title, options, default=selected, **kwargs)
+
+    monkeypatch.setattr(curses_ui, "curses_radiolist", radio)
+
+
 def setup_state(external_provider, monkeypatch, *, route="local"):
     import hermes_cli.memory_setup as setup
 
@@ -72,7 +81,7 @@ def test_setup_persists_preset_and_real_gateway_session_boundaries(
     other_home, _, _, _ = external_provider("other-profile")
     other_before = (other_home / "config.yaml").read_bytes()
     menus = []
-    monkeypatch.setattr(setup, "_curses_select", select_profile(profile, route, menus, setup))
+    patch_menu(monkeypatch, select_profile(profile, route, menus, setup))
     token = set_hermes_home_override(other_home)
     try:
         provider.post_setup(str(home), config)
@@ -95,6 +104,11 @@ def test_setup_persists_preset_and_real_gateway_session_boundaries(
     )
     assert [item[0] for item in menus].count("  Confirm Shared Agent") == (profile == "shared")
     assert len(menus[0][1]) == 2
+    if profile == "shared":
+        confirmation = next(menu for menu in menus if menu[0] == "  Confirm Shared Agent")
+        assert confirmation[2]["default"] == 1
+        assert "across chats" in confirmation[2]["description"]
+        assert "Different groups keep separate" in confirmation[2]["description"]
 
     def key(sender, *, chat="group-a", thread=None):
         source = SimpleNamespace(
@@ -137,7 +151,7 @@ def test_cancelled_or_failed_setup_does_not_apply_preset(external_provider, monk
         "validation": [1, 0, 0, 0, setup._CANCELLED],
     }
     selections = iter(selectors[stage])
-    monkeypatch.setattr(setup, "_curses_select", lambda *_, **__: next(selections))
+    patch_menu(monkeypatch, lambda *_, **__: next(selections))
     if stage == "validation":
         monkeypatch.setattr(
             module,
@@ -164,7 +178,7 @@ def test_saved_selection_and_back_from_shared_keep_personal_session_policy(
         menus.append((title, options, kwargs))
         return next(selections)
 
-    monkeypatch.setattr(setup, "_curses_select", select)
+    patch_menu(monkeypatch, select)
     provider.post_setup(str(home), config)
     assert menus[0][2]["default"] == 1
     assert menus[1][2]["default"] == 1  # Sharing always needs explicit confirmation.
