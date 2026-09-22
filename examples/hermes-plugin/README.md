@@ -208,17 +208,38 @@ OpenViking server auto-commit is disabled by default, so an accepted message
 whose explicit commit fails normally remains live and unextracted until it is
 manually committed.
 
-Hermes built-in `memory` tool additions are mirrored to OpenViking after the
-local memory operation succeeds:
+Successful Hermes built-in `memory` mutations are mirrored to OpenViking in
+order. The active profile records each mirrored entry's exact URI in
+`$HERMES_HOME/openviking/memory_mirror_registry.json`:
 
 | Hermes action | OpenViking operation |
 |---------------|----------------------|
-| `add` | `content/write` with `mode=create` under user memory, or the configured peer memory directory |
+| `add` | Create a file under user memory or the configured peer, then record its URI |
+| `replace` | Match `target` and `old_text` in the registry, update the same URI, and wait for semantic/vector refresh |
+| `remove` | Match `target` and `old_text` in the registry, delete that exact URI, and wait for semantic cleanup |
 
-Built-in `replace` and `remove` operations are not mirrored because Hermes
-native memory entries do not yet carry stable OpenViking file URIs. Use
-`viking_forget` when the user explicitly asks to delete a specific OpenViking
-memory URI.
+The registry stores the current entry text and a connection fingerprint, not
+the raw API key. Endpoint, credentials, user, account, and peer changes isolate
+the new connection from earlier mappings. New files require a server-confirmed
+user identity. Missing or ambiguous mappings block replacement and deletion
+with a warning; the plugin never selects a target by semantic similarity.
+
+Only entries created by this mirror have mappings. Session-extracted memories,
+explicit `viking_remember` results, and copies created before this registry are
+outside its scope. Use `viking_forget` with an exact URI to remove those copies.
+
+The mirror is asynchronous. Hermes saves its local memory first. Remote failures
+leave the registry unchanged and produce a warning, but there is no durable
+replay. A remote mutation followed by a failed registry save can also cause
+drift. Operations are ordered per provider; registry updates are serialized
+across instances sharing a profile in one process, not across processes.
+
+Registry files use mode `0600` on POSIX. Protect the profile with normal account
+and filesystem permissions on Windows. An unreadable, invalid, or unsupported
+registry blocks all mirror writes. Stop Hermes before restoring a valid backup.
+For an unsupported version, use a plugin version that supports it. Renaming a
+damaged registry starts a new registry but leaves earlier remote copies without
+mappings; those copies need manual cleanup by exact URI.
 
 `viking_forget` is intentionally narrow. It only accepts concrete user memory
 file URIs, such as

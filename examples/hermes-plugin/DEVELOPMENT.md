@@ -23,6 +23,14 @@ The active-session commit lifecycle was ported from
 with the original author retained. The OpenViking adaptation uses a configurable
 pending-token threshold instead of the original six-turn trigger.
 
+Native memory mirroring is adapted from
+[Hermes PR #100187](https://github.com/NousResearch/hermes-agent/pull/100187),
+commit `32f75a9e6728a9a3d2f50a870dab3715a1f34fd7`, which continues
+[austinlaw076's PR #85860](https://github.com/NousResearch/hermes-agent/pull/85860).
+The external plugin uses relative imports and Hermes's context-preserving worker
+helper. Its connection cache and session-commit lifecycle retain the later
+OpenViking fixes.
+
 ## Migration coordination
 
 After this directory is merged, submit a Hermes catalog entry with:
