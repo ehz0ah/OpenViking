@@ -151,7 +151,9 @@ async def embed_compat(
 def _embed_with_span(
     embedder: "EmbedderBase", content: "EmbeddingInput", *, is_query: bool
 ) -> "EmbedResult":
-    if embedder._is_embedding_wrapper:
+    if getattr(embedder, "_is_embedding_wrapper", False) or not hasattr(
+        embedder, "_embedding_span"
+    ):
         return embedder.embed(content, is_query=is_query)
     with embedder._embedding_span():
         return embedder.embed(content, is_query=is_query)
@@ -160,7 +162,9 @@ def _embed_with_span(
 async def _embed_async_with_span(
     embedder: "EmbedderBase", content: "EmbeddingInput", *, is_query: bool
 ) -> "EmbedResult":
-    if embedder._is_embedding_wrapper:
+    if getattr(embedder, "_is_embedding_wrapper", False) or not hasattr(
+        embedder, "_embedding_span"
+    ):
         return await embedder.embed_async(content, is_query=is_query)
     with embedder._embedding_span():
         return await embedder.embed_async(content, is_query=is_query)
