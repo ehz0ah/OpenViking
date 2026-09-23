@@ -306,8 +306,6 @@ class NativeMemoryMirror:
                 }
             )
             self._save_registry(path, registry)
-            if isinstance(result, dict):
-                self._warn_failed_indexing(result, canonical_uri)
             return
 
         index, mapping = self._resolve_mapping(

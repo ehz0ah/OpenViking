@@ -285,6 +285,9 @@ order. The active profile records each mirrored entry's exact URI in
 | `replace` | Match the committed event's full previous content and target, update the same URI, and wait for semantic/vector refresh |
 | `remove` | Match the committed event's full previous content and target, delete that exact URI, and wait for semantic cleanup |
 
+Replacing a mapped entry recreates its file if it was deleted directly in
+OpenViking, for example with `viking_forget`.
+
 The registry stores the current entry text and a connection fingerprint, not
 the raw API key. Endpoint, credentials, user, account, and peer changes isolate
 the new connection from earlier mappings. New files require a server-confirmed
@@ -306,12 +309,14 @@ explicit `viking_remember` results, and copies created before this registry are
 outside its scope. Use `viking_forget` with an exact URI to remove those copies.
 
 The mirror is asynchronous. Hermes saves its local memory first. Rejected remote
-writes leave the registry unchanged and produce a warning. If the file changes
-but indexing fails, the registry retains the new content and exact URI; a warning
-reports the indexing failure because search results may be stale. There is no
-durable replay. A remote mutation followed by a failed registry save can also cause
-drift. Operations are ordered per provider; registry updates are serialized
-across instances sharing a profile in one process, not across processes.
+writes leave the registry unchanged and produce a warning. Additions do not wait
+for indexing, so the mirror does not report later indexing failures. For `replace`,
+if the server reports that the file changed but indexing failed, the registry
+retains the new content and exact URI; a warning reports the indexing failure
+because search results may be stale. There is no durable replay. A remote mutation
+followed by a failed registry save can also cause drift. Operations are ordered
+per provider; registry updates are serialized across instances sharing a profile
+in one process, not across processes.
 
 Registry files use mode `0600` on POSIX. Protect the profile with normal account
 and filesystem permissions on Windows. An unreadable, invalid, or unsupported
