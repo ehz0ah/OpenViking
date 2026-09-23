@@ -86,6 +86,7 @@ impl RetrievalProbeOperations for HttpClient {
             "semantic_and_vectors",
             Vec::new(),
             "replace",
+            None,
         )
         .await
     }
