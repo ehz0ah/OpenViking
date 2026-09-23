@@ -460,3 +460,5 @@ def run_setup(hermes_home: str, config: dict) -> None:
         save_config(config)
         if usage_profile == _SHARED_PROFILE:
             _say("Restart the Hermes gateway to apply the shared session settings.")
+        else:
+            _say("Personal recall enabled. Conversation-sharing settings are unchanged.")
