@@ -1,4 +1,4 @@
-"""Load the installed external provider for plugin-owned regression tests."""
+"""Load the plugin through Hermes discovery in isolated profile homes."""
 
 import os
 import shutil

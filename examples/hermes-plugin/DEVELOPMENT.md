@@ -31,6 +31,16 @@ The external plugin uses relative imports and Hermes's context-preserving worker
 helper. Its connection cache and session-commit lifecycle retain the later
 OpenViking fixes.
 
+Gateway sender attribution and recall scope adapt
+[Hermes PR #105812](https://github.com/NousResearch/hermes-agent/pull/105812),
+including liuhao1024's capture change from
+[PR #98506](https://github.com/NousResearch/hermes-agent/pull/98506), with the
+original author retained. The adaptation uses Hermes's existing per-turn author
+hooks and preserves the original sender-ID encoding and Personal/Shared setup
+presets. Shared Agent changes gateway session settings only after confirmation;
+Personal Agent preserves them. An upgrade with no recall scope set retains the
+previous recall requests. No Hermes core patch is required.
+
 ## Migration coordination
 
 After this directory is merged, submit a Hermes catalog entry with:
@@ -45,8 +55,8 @@ bundled provider. Hermes PR [#114569](https://github.com/NousResearch/hermes-age
 adds catalog recovery for configured providers that no longer resolve. The
 bundled provider takes precedence while it remains present.
 
-This import does not add a Desktop `config_schema.py` or change the setup wizard.
-The wizard still uses private helpers from `hermes_cli.memory_setup`; changes to
+This plugin does not add a Desktop `config_schema.py`.
+The wizard uses private helpers from `hermes_cli.memory_setup`; changes to
 those helpers require compatibility checks. The plugin uses HTTP and does not
 install or package the OpenViking server.
 
@@ -54,8 +64,10 @@ install or package the OpenViking server.
 
 Use a Hermes checkout with its development dependencies installed.
 
-The complete mirror tests require the committed-entry event contract from
-[Hermes PR #118903](https://github.com/NousResearch/hermes-agent/pull/118903):
+The complete mirror tests require the committed-entry event contract introduced
+in [Hermes PR #118903](https://github.com/NousResearch/hermes-agent/pull/118903)
+and merged through [#120003](https://github.com/NousResearch/hermes-agent/pull/120003)
+(commit `5908e1aaa83e82aaf12541d7a9d90762d0b46a64`):
 `MemoryManager` forwards `previous_content` for each successful replace/remove.
 The legacy compatibility tests verify that missing metadata skips these remote
 mutations. Do not substitute a guessed match in tests or production.
@@ -74,6 +86,11 @@ and remove bundled-provider discovery.
 They cover external loading, profile isolation, setup, tools, session commits,
 and native memory mirroring. The mirror suite includes ordered writes, restart
 continuity, registry failures, connection isolation, and concurrent workers.
+Gateway tests use mock events through Hermes's turn hooks and memory manager.
+They cover sender changes, capture retries, commits, recall scopes, compression
+fallback, and missing sender metadata. Setup tests cover both presets,
+confirmation, cancellation, profile-local persistence, connection routes, and
+actual Hermes session keys.
 Provider-specific regression tests belong here and must use the shared external
 loader fixture. Generic Hermes framework tests remain in Hermes.
 

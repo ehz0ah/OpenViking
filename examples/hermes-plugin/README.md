@@ -89,6 +89,24 @@ The setup can link to an existing `~/.openviking/ovcli.conf`, copy its current
 connection values into Hermes, or create a minimal `ovcli.conf` when one does
 not exist.
 
+Setup first asks how the Hermes instance is used:
+
+| Preset | Hermes conversation history | OpenViking long-term recall |
+|--------|-----------------------------|-----------------------------|
+| **Personal Agent** | Keeps existing group/thread session settings | Common memory and the current sender's memory (`peer`) |
+| **Shared Agent** | Shares each group or thread session between its participants | Common memory and all sender memories under the same OpenViking user (`shared`) |
+
+Shared Agent requires confirmation before it sets `group_sessions_per_user` and
+`thread_sessions_per_user` to `false`. Different groups still have separate
+conversation histories. Restart the gateway to apply changed session settings.
+Personal Agent does not make an already shared conversation private.
+
+Both presets retain sender attribution during capture. After commit and
+extraction, OpenViking can recall those memories across chats according to the
+chosen scope. Upgrading the plugin alone does not apply a preset or change
+session settings. Rerunning setup preselects the saved recall choice; a new
+setup starts on Personal Agent.
+
 Or manually:
 
 ```bash
@@ -167,6 +185,55 @@ Set `agent: hermes` to restore peer-scoped writes. Memories written at user
 scope before this change stay there and remain searchable. This setting
 changes future writes, not the location of existing memories.
 
+### Gateway senders and automatic recall
+
+The external provider attaches the current gateway sender to captured user
+messages as a peer, for example `telegram.123456`. The OpenViking account and
+user stay unchanged. Assistant messages keep the configured `agent` peer.
+CLI messages without a gateway sender keep their existing user-level attribution.
+Existing memories are not moved.
+
+The setup presets save the automatic recall scope. You can also set it in the
+active profile's `config.yaml`:
+
+```yaml
+memory:
+  openviking:
+    recall_scope: peer
+```
+
+| Value | Automatic recall |
+|-------|------------------|
+| `shared` | Common memory and all peer memories under the same OpenViking user. |
+| `peer` | Common memory and the current gateway sender's memory. With no sender, only common memory is recalled. |
+
+With no scope set, the provider preserves the previous requests: normally
+shared recall, but an explicitly configured assistant peer can narrow list
+recall. Existing compression behavior is also retained. This is compatibility
+handling for existing installations, not a third setup mode. Invalid values
+warn and preserve that behavior.
+
+`OPENVIKING_RECALL_SCOPE` overrides YAML. On successful setup, the wizard removes
+this override from the profile's `.env` so the selected preset takes effect.
+An override supplied again by a service or shell still takes precedence.
+The configuration schema exposes only `shared` and `peer`. A stable
+alternate sender ID is used when Hermes supplies one; unsafe IDs are encoded
+to valid peer IDs. Queued captures retain their own sender when another
+participant sends a turn.
+
+The scope applies to automatic query recall, including compression and search
+fallbacks. If an older server cannot confirm sender-scoped compression, the
+provider uses scoped list recall. Enabled resource recall includes common
+resources and, in `peer` mode, the sender's resources.
+
+This is a retrieval setting, not an access-control boundary. It does not filter
+shared conversation history or change explicit `viking_*` tools, native memory
+mirroring, or credentials. Setting `recall_scope` alone does not change gateway
+sessions; the confirmed Shared Agent setup preset applies those settings.
+Explicit tools retain
+the configured assistant view. Use separate OpenViking users and credentials
+when participants require separate access rights.
+
 ## Tools
 
 | Tool | Description |
@@ -229,8 +296,10 @@ Replacement and deletion require Hermes to provide authoritative
 without this event contract skip those mirror operations with a warning; native
 local memory still changes. The plugin never falls back to matching the caller's
 `old_text` against its partial registry.
-The required event contract is provided by
-[Hermes PR #118903](https://github.com/NousResearch/hermes-agent/pull/118903).
+The required event contract was merged in
+[Hermes PR #120003](https://github.com/NousResearch/hermes-agent/pull/120003)
+(commit `5908e1aaa83e82aaf12541d7a9d90762d0b46a64`), which landed
+[#118903](https://github.com/NousResearch/hermes-agent/pull/118903).
 
 Only entries created by this mirror have mappings. Session-extracted memories,
 explicit `viking_remember` results, and copies created before this registry are
