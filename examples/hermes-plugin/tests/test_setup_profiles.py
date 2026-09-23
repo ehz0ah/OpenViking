@@ -67,7 +67,7 @@ def select_profile(profile, route, menus, setup):
 @pytest.mark.parametrize("route", ["local", "linked", "mirror"])
 @pytest.mark.parametrize("profile", ["personal", "shared"])
 def test_setup_persists_preset_and_real_gateway_session_boundaries(
-    external_provider, monkeypatch, route, profile
+    external_provider, monkeypatch, capsys, route, profile
 ):
     from gateway.config import Platform
     from gateway.session import build_session_key
@@ -88,6 +88,13 @@ def test_setup_persists_preset_and_real_gateway_session_boundaries(
         assert get_hermes_home() == other_home
     finally:
         reset_hermes_home_override(token)
+    output = capsys.readouterr().out
+    assert (
+        "Personal recall enabled. Conversation-sharing settings are unchanged." in output
+    ) == (profile == "personal")
+    assert (
+        "Restart the Hermes gateway to apply the shared session settings." in output
+    ) == (profile == "shared")
     assert (other_home / "config.yaml").read_bytes() == other_before
     saved = yaml.safe_load((home / "config.yaml").read_text())
     settings = saved["memory"]["openviking"]
@@ -132,7 +139,9 @@ def test_setup_persists_preset_and_real_gateway_session_boundaries(
 
 
 @pytest.mark.parametrize("stage", ["usage", "confirm", "connection", "save", "validation"])
-def test_cancelled_or_failed_setup_does_not_apply_preset(external_provider, monkeypatch, stage):
+def test_cancelled_or_failed_setup_does_not_apply_preset(
+    external_provider, monkeypatch, capsys, stage
+):
     home, provider, module, config, setup = setup_state(
         external_provider, monkeypatch, route="linked" if stage == "validation" else "local"
     )
@@ -159,6 +168,9 @@ def test_cancelled_or_failed_setup_does_not_apply_preset(external_provider, monk
             lambda *_, **__: (False, "unavailable", None),
         )
     provider.post_setup(str(home), config)
+    output = capsys.readouterr().out
+    assert "Personal recall enabled." not in output
+    assert "Restart the Hermes gateway" not in output
     assert config == before
     assert all(path.read_bytes() == content for path, content in contents.items())
     assert not (module._default_ovcli_config_path().parent / "ovcli.conf.new-profile").exists()
