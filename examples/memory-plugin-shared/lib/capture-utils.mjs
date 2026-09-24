@@ -442,9 +442,7 @@ export function shapeCapturePayload(payload, role, cfg = {}, { toolNameById = {}
   if (shaped.dropped) return { parts: [], text: "", signalText: "", dropped: true };
 
   const parts = sourceParts.length ? shaped.parts : [];
-  const hasApplicableFilter = compileInputFilters(cfg.captureFilters).rules
-    .some((rule) => !rule.scope || rule.scope === role);
-  const decisionText = hasApplicableFilter && (hasTextPart || fallback.length)
+  const decisionText = hasTextPart || fallback.length
     ? shaped.parts.filter((part) => part.type === "text").map((part) => part.text).join("\n\n")
     : sanitizedText;
   const decision = faithful
@@ -595,7 +593,7 @@ export function sanitizeCapturedText(text) {
     .replace(/^[ \t]*\[Subagent Context\][^\n]*$/gim, " ")
     .replace(/^\s*Sender\s*\([^)]+\)\s*```[\s\S]*?```\s*/gim, " ")
     .replace(/^\s*Conversation (?:metadata|info):\s*```[\s\S]*?```\s*/gim, " ")
-    .replace(/^\s*\[?\d{4}-\d{2}-\d{2}[T ][^\]\n]{3,80}\]?\s*/gm, "")
+    .replace(/^[ \t]*\[\d{4}-\d{2}-\d{2}[T ][-+0-9:.Z]{5,35}\][ \t]*/gm, "")
     .replace(/^\s*\d{10,13}\s+/gm, "");
   value = stripMetadataFences(value);
   value = stripInjectedDigestBlocks(value);

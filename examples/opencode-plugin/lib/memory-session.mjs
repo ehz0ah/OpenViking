@@ -383,10 +383,15 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (role === "assistant" && !config.captureAssistantTurns) return null
 
     const shaped = shapeCapturePayload({ role, content: partsRaw }, role, config)
-    const hasToolPart = shaped.parts.some((part) => part.type !== "text")
-    if (shaped.dropped || (!shaped.text && !hasToolPart)) return null
-    const body = hasToolPart
-      ? { role, parts: shaped.parts }
+    const toolParts = shaped.parts.filter((part) => part.type !== "text")
+    if (shaped.dropped || (!shaped.text && toolParts.length === 0)) return null
+    const body = toolParts.length > 0
+      ? { role, parts: [
+        ...(shaped.text && shaped.parts.some((part) => part.type === "text")
+          ? [{ type: "text", text: shaped.text }]
+          : []),
+        ...toolParts,
+      ] }
       : { role, content: shaped.text }
     const peerId = effectivePeerId(config)
     if (peerId) body.peer_id = peerId

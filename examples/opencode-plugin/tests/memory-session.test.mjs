@@ -437,6 +437,37 @@ test("OpenCode capture filters sanitized text before sending", async () => {
   })
 })
 
+test("OpenCode caps mixed-message text and omits low-signal text", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-mixed-", async (dir) => {
+      const manager = createMemorySessionManager({ config: baseConfig(endpoint), pluginRoot: dir })
+      await manager.init()
+      for (const [id, text] of [["long", "x".repeat(40000)], ["ack", "ok"]]) {
+        const message = {
+          id, type: "assistant", content: [
+            { type: "text", text },
+            { type: "tool", id: `tool-${id}`, name: "lookup", state: {
+              status: "completed", input: { id }, content: [{ type: "text", text: "result" }],
+            } },
+          ],
+        }
+        for (const event of contextMessageEvents("oc-mixed", message)) await manager.handleEvent(event)
+      }
+      await manager.handleEvent({ type: "session.idle", sessionID: "oc-mixed" })
+      const sent = requests.find((request) => request.url === "/api/v1/sessions/oc-oc-mixed/messages/batch")
+      assert.ok(sent)
+      const messages = JSON.parse(sent.body).messages
+      assert.equal(messages.length, 2)
+      assert.equal(messages[0].parts[0].type, "text")
+      assert.ok(messages[0].parts[0].text.length <= 24000)
+      assert.match(messages[0].parts[0].text, /\[truncated\]$/)
+      assert.equal(messages[0].parts[1].type, "tool")
+      assert.deepEqual(messages[1].parts.map((part) => part.type), ["tool"])
+      await manager.flushAll({ commit: false })
+    })
+  })
+})
+
 test("concurrent saves never race the shared state file (#3877)", async (t) => {
   // Widen the race window: concurrent saveState() calls share the same
   // `${statePath}.tmp` temp file. A slow writeFile keeps the shared .tmp

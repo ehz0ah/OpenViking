@@ -277,19 +277,32 @@ test("shared capture filters aggregate text and leave tool payloads intact", () 
   assert.equal(toolOnly.parts[0].type, "tool")
 })
 
-test("shared capture keeps mixed-message text when no rule applies to its role", () => {
+test("shared capture uses conversation text for mixed messages regardless of rule presence", () => {
   const payload = { role: "assistant", content: [
     { type: "text", text: "Run this." },
     { type: "toolCall", id: "call-1", name: "lookup", arguments: { q: "x" } },
   ] }
   const baseline = shapeCapturePayload(payload, "assistant", {}, { faithful: true })
-  assert.match(baseline.text, /^Run this\.\n\n\[tool-call lookup\]/)
+  assert.equal(baseline.text, "Run this.")
   assert.deepEqual(shapeCapturePayload(payload, "assistant", {
     captureFilters: ["user:d/.*/"],
+  }, { faithful: true }), baseline)
+  assert.deepEqual(shapeCapturePayload(payload, "assistant", {
+    captureFilters: ["s/zzz/y/"],
   }, { faithful: true }), baseline)
   assert.equal(shapeCapturePayload(payload, "assistant", {
     captureFilters: ["assistant:s/Run/Do/"],
   }, { faithful: true }).text, "Do this.")
+})
+
+test("sanitation keeps ordinary timestamped log lines", () => {
+  const log = "2024-01-01 12:00:00 ERROR something broke\n2024-01-01 12:00:01 INFO retry"
+  assert.equal(sanitizeCapturedText(log), log)
+  const turns = extractCaptureTurns([userEntry(log)], {})
+  assert.equal(turns.length, 1)
+  assert.deepEqual(turns[0].parts, [{ type: "text", text: log }])
+  assert.equal(sanitizeCapturedText("[2024-01-01 12:00:00] Context"), "Context")
+  assert.equal(sanitizeCapturedText("[2024-01-01 12:00:00 ERROR] failed"), "[2024-01-01 12:00:00 ERROR] failed")
 })
 
 test("shouldCaptureText reports a filtered drop and can be asked to skip filters", () => {
