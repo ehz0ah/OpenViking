@@ -832,13 +832,23 @@ def _profile_openviking_env(hermes_home: Optional[str]) -> Optional[dict]:
 
         hydrate_profile_secret_sources(hermes_home)
         env = build_profile_secret_scope(Path(hermes_home))
-        # Process OPENVIKING_* belongs to the launch home, even when another
-        # profile's context is active. A routed provider must never inherit it.
-        if (not is_multiplex_active()
-                and _get_launch_hermes_home().resolve() == Path(hermes_home).resolve()):
-            for key, value in os.environ.items():
-                if key.startswith("OPENVIKING_"):
-                    env.setdefault(key, value)
+        # A routed provider must never inherit launch process credentials.
+        if _get_launch_hermes_home().resolve() == Path(hermes_home).resolve():
+            if is_multiplex_active():
+                try:
+                    from tui_gateway import launch_profile_policy
+                except ImportError:  # older Hermes without launch-profile hosting
+                    pass
+                else:
+                    # launch_secret_scope captures live os.environ when no snapshot
+                    # exists. The messaging gateway has no snapshot, so only use
+                    # the frozen one created by multi-profile host activation.
+                    if getattr(launch_profile_policy, "_snapshot", None) is not None:
+                        env = launch_profile_policy.launch_secret_scope(hermes_home)
+            else:
+                for key, value in os.environ.items():
+                    if key.startswith("OPENVIKING_"):
+                        env.setdefault(key, value)
         return env
     except Exception as exc:
         logger.warning("OpenViking could not load profile secrets for %s (%s).", hermes_home, type(exc).__name__)

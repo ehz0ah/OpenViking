@@ -175,6 +175,56 @@ def test_routed_profile_does_not_borrow_launch_process_env(external_provider, mo
         pin_process_hermes_home(prior_pin)
 
 
+def test_multiplex_launch_profile_uses_frozen_process_secrets(external_provider, monkeypatch):
+    from agent.secret_scope import get_secret
+    from hermes_constants import (
+        get_routing_process_hermes_home,
+        pin_process_hermes_home,
+        process_hermes_home_is_pinned,
+    )
+    from tui_gateway import launch_profile_policy
+
+    launch_home, launch_provider, launch_module, _ = external_provider("multiplex-launch")
+    routed_home, routed_provider, routed_module, _ = external_provider("multiplex-routed")
+    launch_provider._hermes_home, launch_provider._hermes_home_bound = str(launch_home), True
+    routed_provider._hermes_home, routed_provider._hermes_home_bound = str(routed_home), True
+    monkeypatch.setenv("HERMES_HOME", str(launch_home))
+    monkeypatch.setenv("OPENVIKING_ENDPOINT", "http://127.0.0.1:19522")
+    monkeypatch.setenv("OPENVIKING_API_KEY", "frozen-launch-key")
+    monkeypatch.setattr(launch_profile_policy, "_snapshot", None)
+    launch_profile_policy.capture_launch_env()
+    monkeypatch.setattr("agent.secret_scope._MULTIPLEX_ACTIVE", True)
+    prior_pin = get_routing_process_hermes_home() if process_hermes_home_is_pinned() else None
+    pin_process_hermes_home(launch_home)
+    try:
+        # A later process mutation must not affect the launch snapshot or leak to B.
+        monkeypatch.setenv("OPENVIKING_ENDPOINT", "http://127.0.0.1:19523")
+        monkeypatch.setenv("OPENVIKING_API_KEY", "poisoned-live-key")
+        with launch_profile_policy.launch_profile_runtime_scope(launch_home):
+            assert get_secret("OPENVIKING_API_KEY") == "frozen-launch-key"
+            launch = launch_provider._resolve_bound_connection_settings()
+            routed = routed_provider._resolve_bound_connection_settings()
+            assert (launch["endpoint"], launch["api_key"]) == (
+                "http://127.0.0.1:19522", "frozen-launch-key"
+            )
+            assert (routed["endpoint"], routed["api_key"]) == (routed_module._DEFAULT_ENDPOINT, "")
+
+        (launch_home / ".env").write_text("OPENVIKING_API_KEY=file-key\n")
+        with launch_profile_policy.launch_profile_runtime_scope(launch_home):
+            assert launch_provider._resolve_bound_connection_settings()["api_key"] == "file-key"
+
+        # The messaging gateway may activate multiplex without freezing a launch
+        # snapshot. In that case, never capture its live process env on demand.
+        monkeypatch.setattr(launch_profile_policy, "_snapshot", None)
+        without_snapshot = launch_provider._resolve_bound_connection_settings()
+        assert (without_snapshot["endpoint"], without_snapshot["api_key"]) == (
+            launch_module._DEFAULT_ENDPOINT, "file-key"
+        )
+        assert launch_profile_policy._snapshot is None
+    finally:
+        pin_process_hermes_home(prior_pin)
+
+
 def test_api_key_trusted_retry_keeps_default_identity(external_provider):
     _, _, module, _ = external_provider("trusted-retry")
     requests = []
