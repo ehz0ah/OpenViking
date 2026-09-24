@@ -2,6 +2,7 @@
 
 import json
 import threading
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -22,6 +23,112 @@ def test_external_discovery_preserves_profile_config_and_relative_setup(external
     assert module_b._setup._ov() is module_b
     assert provider_again.get_tool_schemas() == provider_a.get_tool_schemas()
     assert (home_a / "config.yaml").read_bytes() == before
+
+
+def test_initialized_profile_owns_connection_and_recall_across_other_profile(external_provider, monkeypatch):
+    from agent.secret_scope import build_profile_secret_scope, reset_secret_scope, set_secret_scope
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    requests = []
+    servers = []
+
+    def start_server(label):
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                requests.append((label, self.path, body, self.headers.get("X-API-Key"),
+                                 self.headers.get("X-OpenViking-Actor-Peer")))
+                payload = b'{"result":{"memories":[]}}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *_args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        servers.append((server, worker))
+        return f"http://127.0.0.1:{server.server_port}"
+
+    @contextmanager
+    def profile_scope(home):
+        home_token = set_hermes_home_override(home)
+        secret_token = set_secret_scope(build_profile_secret_scope(home), profile_home=str(home))
+        try:
+            yield
+        finally:
+            reset_secret_scope(secret_token)
+            reset_hermes_home_override(home_token)
+
+    try:
+        endpoint_a, endpoint_b = start_server("a"), start_server("b")
+        home_a, provider, module, _ = external_provider("owner-a")
+        home_b, _, _, _ = external_provider("owner-b")
+        for home, endpoint, label, budget in (
+            (home_a, endpoint_a, "a", 1100), (home_b, endpoint_b, "b", 2200)
+        ):
+            (home / "config.yaml").write_text(
+                "memory:\n  provider: openviking\n  openviking:\n"
+                f"    endpoint: {endpoint}\n    recall_limit: {3 if label == 'a' else 9}\n"
+                "    profile_token_budget: ${OV_TEST_BUDGET}\n", encoding="utf-8"
+            )
+            (home / ".env").write_text(
+                f"OPENVIKING_API_KEY=key-{label}\n"
+                f"OPENVIKING_ACCOUNT=account-{label}\nOPENVIKING_USER=user-{label}\n"
+                f"OPENVIKING_AGENT=peer-{label}\nOV_TEST_BUDGET={budget}\n", encoding="utf-8"
+            )
+
+        monkeypatch.setattr(module, "_classify_runtime_openviking_health", lambda *_: ("healthy", ""))
+        with profile_scope(home_a):
+            provider.initialize("session-a", hermes_home=str(home_a))
+            assert provider._client._api_key == "key-a"
+            assert provider._profile_token_budget() == 1100
+
+        with profile_scope(home_b):
+            provider.handle_tool_call("viking_search", {"query": "preference", "mode": "deep"})
+            assert provider._client._account == "account-a"
+            assert provider._client._user == "user-a"
+            assert provider._recall_config()["limit"] == 3
+            assert provider._profile_token_budget() == 1100
+
+            (home_a / ".env").write_text(
+                "OPENVIKING_API_KEY=key-a-new\nOPENVIKING_ACCOUNT=account-a\n"
+                "OPENVIKING_USER=user-a\nOPENVIKING_AGENT=peer-a-new\n"
+                "OV_TEST_BUDGET=1100\n", encoding="utf-8"
+            )
+            provider.handle_tool_call("viking_search", {"query": "preference", "mode": "deep"})
+
+            # Removing A's credentials must not borrow B's active or process values.
+            (home_a / ".env").write_text(
+                "OPENVIKING_AGENT=peer-a\nOV_TEST_BUDGET=1100\n", encoding="utf-8"
+            )
+            monkeypatch.setenv("OPENVIKING_API_KEY", "process-b-key")
+            monkeypatch.setenv("OPENVIKING_ACCOUNT", "process-b-account")
+            monkeypatch.setenv("OPENVIKING_USER", "process-b-user")
+            provider.handle_tool_call("viking_search", {"query": "preference", "mode": "deep"})
+            assert (provider._client._api_key, provider._client._account, provider._client._user) == (
+                "", "default", "default"
+            )
+
+            # An absent A endpoint must not route to B's process-level endpoint.
+            (home_a / "config.yaml").write_text("memory:\n  provider: openviking\n", encoding="utf-8")
+            monkeypatch.setenv("OPENVIKING_ENDPOINT", endpoint_b)
+            assert provider._resolve_bound_connection_settings()["endpoint"] == module._DEFAULT_ENDPOINT
+
+        assert [(label, key, peer) for label, _, _, key, peer in requests] == [
+            ("a", "key-a", "peer-a"), ("a", "key-a-new", "peer-a-new"),
+            ("a", None, "peer-a")
+        ]
+        assert all(body["session_id"] == "session-a" for _, _, body, _, _ in requests)
+    finally:
+        for server, worker in servers:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=5)
 
 
 @pytest.mark.parametrize("target", ["memory", "user"])

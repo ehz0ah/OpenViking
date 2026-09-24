@@ -138,6 +138,11 @@ OpenViking's server config is separate from Hermes:
 Hermes-side provider config is read from environment variables in the active
 profile's `.env`:
 
+After initialization, the provider keeps its selected Hermes profile for
+connection, identity, and recall settings, including when another profile is
+active in the same process. Single-profile CLI and service launches can also
+set `OPENVIKING_*` in the process environment.
+
 | Env Var | Default | Description |
 |---------|---------|-------------|
 | `OPENVIKING_ENDPOINT` | `http://127.0.0.1:1933` | Server URL |
