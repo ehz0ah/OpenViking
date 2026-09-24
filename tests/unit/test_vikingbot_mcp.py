@@ -3,6 +3,9 @@ from types import SimpleNamespace
 
 import httpx2
 import pytest
+from mcp import Client
+from mcp.server import MCPServer
+from mcp.shared.exceptions import MCPError
 from mcp.types import Tool as MCPTool
 from vikingbot.agent.tools.mcp import MCPToolWrapper, connect_mcp_servers
 
@@ -27,6 +30,40 @@ def test_mcp_tool_wrapper_uses_discovered_input_schema():
         "properties": {"query": {"type": "string"}},
         "required": ["query"],
     }
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_wrapper_preserves_protocol_error_details():
+    server = MCPServer("error-test")
+
+    @server.tool()
+    def fail():
+        raise MCPError(-32042, "OpenViking backend unavailable; retry later")
+
+    async with Client(server, mode="auto", cache=None) as client:
+        tools = await client.list_tools()
+        wrapper = MCPToolWrapper(client.session, "openviking", tools.tools[0])
+        result = await wrapper.execute(SimpleNamespace())
+
+    assert result == (
+        "(MCP tool call failed [-32042]: OpenViking backend unavailable; retry later)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_wrapper_sanitizes_unexpected_error_details():
+    class ErrorSession:
+        async def call_tool(self, name, arguments):
+            del name, arguments
+            raise RuntimeError("private backend detail")
+
+    tool = MCPTool(name="fail", inputSchema={"type": "object"})
+    wrapper = MCPToolWrapper(ErrorSession(), "openviking", tool)
+
+    result = await wrapper.execute(SimpleNamespace())
+
+    assert result == "(MCP tool call failed: RuntimeError)"
+    assert "private backend detail" not in result
 
 
 @pytest.mark.parametrize("transport_type", ["sse", "streamableHttp"])

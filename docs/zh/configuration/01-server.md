@@ -272,6 +272,7 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
     "port": 1933,
     "workers": 1,
     "executor_threads": 0,
+    "mcp_max_request_body_size_bytes": 4194304,
     "auth_mode": "dev",
     "cors_origins": ["http://localhost:5173"],
     "profile_enabled": false,
@@ -291,6 +292,7 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `workers` | integer | `1` | 服务进程数量 |
 | `executor_threads` | 非负整数 | `0` | 每个服务进程的 asyncio 默认 executor 最大线程数；`0` 表示沿用 Python 默认策略 |
 | `timeout_keep_alive` | integer（秒） | `5` | 空闲 HTTP keep-alive 超时；应调大到超过上游空闲连接寿命 |
+| `mcp_max_request_body_size_bytes` | 正整数 | `4194304` | MCP Streamable HTTP POST 请求体的最大字节数 |
 | `auth_mode` | `dev`、`api_key`、`trusted` / `null` | `null` | 鉴权模式；空值根据 `root_api_key` 自动判断 |
 | `root_api_key` | string / `null` | `null` | Root API Key；配置后默认启用 `api_key` 模式 |
 | `cors_origins` | string[] | `["*"]` | 允许的跨域来源 |
@@ -300,6 +302,8 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `public_base_url` | URL / `null` | `null` | 外部访问使用的服务基准地址 |
 | `upload_signed_ttl_seconds` | integer | `600` | 签名上传 URL 有效期 |
 | `temp_upload.default_mode` | `"local"` / `"shared"` | `"local"` | 临时上传存储模式 |
+
+超过 `mcp_max_request_body_size_bytes` 的 MCP 请求会在 JSON 解析或工具执行前返回 HTTP 413。请保留客户端实际需要的最小限制，仅为明确需要更大 MCP 消息的可信工作负载提高此值。反向代理可能设置更低的实际限制。对于大型资源或技能文件，请使用 MCP 工具返回的上传流程，不要把文件嵌入 MCP 请求。
 
 ### 文件加密与 API Key 哈希
 

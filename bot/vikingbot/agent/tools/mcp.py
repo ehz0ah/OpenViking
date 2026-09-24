@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx2
 from loguru import logger
+from mcp.shared.exceptions import MCPError
 
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.agent.tools.registry import ToolRegistry
@@ -124,6 +125,14 @@ class MCPToolWrapper(Tool):
                 raise
             logger.warning("MCP tool '{}' was cancelled by server/SDK", self._name)
             return "(MCP tool call was cancelled)"
+        except MCPError as exc:
+            logger.warning(
+                "MCP tool '{}' returned protocol error {}: {}",
+                self._name,
+                exc.code,
+                exc.message,
+            )
+            return f"(MCP tool call failed [{exc.code}]: {exc.message})"
         except Exception as exc:
             logger.exception(
                 "MCP tool '{}' failed: {}: {}",

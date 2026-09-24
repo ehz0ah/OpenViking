@@ -38,6 +38,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from openviking import __version__
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.core.uri_validation import (
@@ -59,6 +60,7 @@ from openviking.server.auth import (
     normalize_actor_peer_header,
     resolve_identity,
 )
+from openviking.server.config import DEFAULT_MCP_MAX_REQUEST_BODY_SIZE_BYTES
 from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
@@ -239,7 +241,7 @@ class _IdentityASGIMiddleware:
 # MCP server tools (aligned with vikingbot/agent/tools/ov_file.py)
 # ---------------------------------------------------------------------------
 
-mcp = MCPServer("openviking")
+mcp = MCPServer("openviking", version=__version__)
 
 
 # -- find / search ---------------------------------------------------------
@@ -1906,7 +1908,10 @@ async def mcp_lifespan():
         yield
 
 
-def create_mcp_app() -> ASGIApp:
+def create_mcp_app(
+    *,
+    max_request_body_size: int = DEFAULT_MCP_MAX_REQUEST_BODY_SIZE_BYTES,
+) -> ASGIApp:
     """Create the MCP ASGI app with identity middleware.
 
     IMPORTANT: call `mcp_lifespan()` inside the FastAPI lifespan BEFORE
@@ -1914,6 +1919,7 @@ def create_mcp_app() -> ASGIApp:
     """
     starlette_app = mcp.streamable_http_app(
         stateless_http=True,
+        max_request_body_size=max_request_body_size,
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
     handler = starlette_app.routes[0].app

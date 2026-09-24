@@ -1738,6 +1738,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
   "server": {
     "host": "127.0.0.1",
     "port": 1933,
+    "mcp_max_request_body_size_bytes": 4194304,
     "auth_mode": "api_key",
     "root_api_key": "your-secret-root-key",
     "profile_enabled": false,
@@ -1769,6 +1770,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 |-------|------|-------------|---------|
 | `host` | str | Bind address | `127.0.0.1` |
 | `port` | int | Bind port | `1933` |
+| `mcp_max_request_body_size_bytes` | int | Maximum MCP Streamable HTTP POST body size in bytes. Requests above the limit return HTTP 413 before JSON parsing or tool dispatch. Keep the smallest limit required by your clients; reverse proxies can enforce a lower limit. | `4194304` (4 MiB) |
 | `auth_mode` | str / null | Built-in modes: `"dev"`, `"api_key"`, `"trusted"`, `"oidc"`, `"ldap"`. When omitted/null, infer `api_key` from a non-empty `root_api_key`; otherwise infer `dev`. | `null` |
 | `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode. In `trusted` mode it is optional on localhost, but required for any non-localhost deployment; it does not become the source of user identity | `null` |
 | `profile_enabled` | bool | Whether to allow request-scoped cProfile via `profile=1` on HTTP requests. When disabled, the server ignores that query parameter. When enabled, the CLI can display the returned `profile`, while the Python HTTP client currently triggers profiling but does not automatically attach the top-level `profile` field to most SDK return values. | `false` |

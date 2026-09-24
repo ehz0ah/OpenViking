@@ -1708,6 +1708,7 @@ ov add-resource ./docs --exclude "*.tmp"
   "server": {
     "host": "127.0.0.1",
     "port": 1933,
+    "mcp_max_request_body_size_bytes": 4194304,
     "auth_mode": "api_key",
     "root_api_key": "your-secret-root-key",
     "profile_enabled": false,
@@ -1739,6 +1740,7 @@ ov add-resource ./docs --exclude "*.tmp"
 |------|------|------|--------|
 | `host` | str | 绑定地址 | `127.0.0.1` |
 | `port` | int | 绑定端口 | `1933` |
+| `mcp_max_request_body_size_bytes` | int | MCP Streamable HTTP POST 请求体的最大字节数。超限请求会在 JSON 解析或工具执行前返回 HTTP 413。请保留客户端实际需要的最小限制；反向代理可能设置更低的限制。 | `4194304`（4 MiB） |
 | `auth_mode` | str / null | 内置模式：`"dev"`、`"api_key"`、`"trusted"`、`"oidc"`、`"ldap"`。省略或设为 null 时，有非空 `root_api_key` 则推导为 `api_key`，否则为 `dev`。 | `null` |
 | `root_api_key` | str | `api_key` 模式必填的 Root API Key；`trusted` 模式仅在 localhost 可省略，非 localhost 部署必填，不负责解析普通用户身份 | `null` |
 | `profile_enabled` | bool | 是否允许 HTTP 请求通过 `profile=1` 开启请求级 cProfile。关闭时服务端会忽略该请求参数；开启后，CLI 可以显示返回的 `profile`，而 Python HTTP client 默认只触发服务端 profile，不会把顶层 `profile` 字段自动附着到大多数 SDK 返回值上。 | `false` |
