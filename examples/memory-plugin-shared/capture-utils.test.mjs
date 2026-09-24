@@ -8,6 +8,7 @@ import {
   filterCaptureParts,
   sanitizeCapturedText,
   shapeCapturePayload,
+  shapeCaptureParts,
   shouldCaptureText,
 } from "./lib/capture-utils.mjs"
 
@@ -241,6 +242,18 @@ test("filterCaptureParts never judges a turn that carries no text", () => {
   assert.equal(shaped.dropped, false)
   assert.deepEqual(shaped.parts, [TOOL_PART])
   assert.equal(filterCaptureParts([], "user", { captureFilters: ["k/x/"] }).dropped, false)
+})
+
+test("already-extracted parts are sanitized before capture rules run", () => {
+  const parts = [
+    { type: "text", text: "<system-reminder>approved</system-reminder>Remember SECRET123" },
+    TOOL_PART,
+  ]
+  assert.equal(shapeCaptureParts(parts, "user", { captureFilters: ["k/approved/"] }).dropped, true)
+  assert.deepEqual(shapeCaptureParts(parts, "user", {
+    captureFilters: ["d/approved/", "s/SECRET123/[redacted]/g"],
+  }).parts, [{ type: "text", text: "Remember [redacted]" }, TOOL_PART])
+  assert.equal(parts[0].text.includes("SECRET123"), true)
 })
 
 test("shared capture filters sanitized conversation text before keep and drop", () => {

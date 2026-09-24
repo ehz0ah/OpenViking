@@ -409,6 +409,14 @@ export function filterCaptureParts(parts, role, cfg = {}) {
   return { parts: out, dropped: out.length === 0 };
 }
 
+/** Sanitize already-extracted message parts before applying capture rules. */
+export function shapeCaptureParts(parts, role, cfg = {}) {
+  const sanitized = (parts || []).map((part) => part?.type === "text"
+    ? { ...part, text: sanitizeCapturedText(part.text) }
+    : part);
+  return filterCaptureParts(sanitized, role, cfg);
+}
+
 function faithfulCaptureDecision(text, cfg) {
   const sanitized = sanitizeCapturedText(text);
   if (!sanitized) return { shouldCapture: false, text: "" };
@@ -430,16 +438,13 @@ export function shapeCapturePayload(payload, role, cfg = {}, { toolNameById = {}
   const rawText = extractTextFromPayload(payload, options);
   const sourceParts = extractPartsFromPayload(payload, options);
   const hasTextPart = sourceParts.some((part) => part?.type === "text");
-  const sanitizedParts = sourceParts.map((part) => part?.type === "text"
-    ? { ...part, text: sanitizeCapturedText(part.text) }
-    : part);
   const sanitizedText = sanitizeCapturedText(rawText);
   // Some hosts supply an array of plain strings. It has text but no structured
   // parts, so use a temporary part for the same filter verdict.
   const fallback = sourceParts.length === 0 && sanitizedText
     ? [{ type: "text", text: sanitizedText }]
     : [];
-  const shaped = filterCaptureParts(sanitizedParts.length ? sanitizedParts : fallback, role, cfg);
+  const shaped = shapeCaptureParts(sourceParts.length ? sourceParts : fallback, role, cfg);
   if (shaped.dropped) return { parts: [], text: "", signalText: "", dropped: true };
 
   const parts = sourceParts.length ? shaped.parts : [];

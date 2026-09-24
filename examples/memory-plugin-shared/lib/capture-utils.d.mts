@@ -2,6 +2,7 @@ export function collectToolNamesByIdFromEntries(entries: any[]): Record<string, 
 export function findLastHumanTurnIndex(turns: any[]): number;
 export function extractPartsFromPayload(payload: any, options?: Record<string, any>): any[];
 export function extractTextFromPayload(payload: any, options?: Record<string, any>): string;
+export function shapeCaptureParts(parts: any[], role: string, cfg?: Record<string, any>): { parts: any[]; dropped: boolean };
 export function shapeCapturePayload(payload: any, role: string, cfg?: Record<string, any>, options?: {
   toolNameById?: Record<string, string>;
   faithful?: boolean;
