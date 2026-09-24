@@ -41,7 +41,7 @@ from agent.memory_provider import MemoryProvider, spawn_context_thread
 from agent.secret_scope import get_secret
 from agent.skill_commands import extract_user_instruction_from_skill_message
 from hermes_cli import __version__ as _HERMES_VERSION
-from hermes_constants import get_hermes_home
+from hermes_constants import get_hermes_home, get_process_hermes_home
 from tools.registry import tool_error
 from utils import atomic_json_write, env_var_enabled
 
@@ -51,6 +51,11 @@ except ImportError:  # pragma: no cover - Windows
     fcntl = None
 
 logger = logging.getLogger(__name__)
+
+try:
+    from hermes_constants import get_routing_process_hermes_home as _get_launch_hermes_home
+except ImportError:  # Hermes releases before process-home pinning
+    _get_launch_hermes_home = get_process_hermes_home
 
 _DEFAULT_ENDPOINT = "http://127.0.0.1:1933"
 _OPENVIKING_SERVICE_ENDPOINT = "https://api.vikingdb.cn-beijing.volces.com/openviking"
@@ -276,8 +281,8 @@ class _VikingClient:
         # omit these headers unless OpenViking explicitly asks for them (retry).
         # Tenant identity is a profile .env value: scope-read so a multiplexed
         # secondary never writes into the default profile's tenant.
-        self._account = (get_secret("OPENVIKING_ACCOUNT", "") or "default") if account is _IDENTITY_UNSET or account is None else account
-        self._user = (get_secret("OPENVIKING_USER", "") or "default") if user is _IDENTITY_UNSET or user is None else user
+        self._account = (get_secret("OPENVIKING_ACCOUNT", "") if account is _IDENTITY_UNSET or account is None else account) or "default"
+        self._user = (get_secret("OPENVIKING_USER", "") if user is _IDENTITY_UNSET or user is None else user) or "default"
         self._agent = (get_secret("OPENVIKING_AGENT", "") or _DEFAULT_AGENT) if agent is _IDENTITY_UNSET or agent is None else agent
         # Every client owns its resolved identity, including clients retained across reloads.
         self._conn_snapshot = (self._endpoint, self._api_key, self._account, self._user, self._agent)
@@ -821,20 +826,16 @@ def _profile_openviking_env(hermes_home: Optional[str]) -> Optional[dict]:
     try:
         from agent.secret_scope import (
             build_profile_secret_scope,
-            current_secret_scope_home,
             is_multiplex_active,
         )
         from hermes_cli.env_loader import hydrate_profile_secret_sources
 
         hydrate_profile_secret_sources(hermes_home)
         env = build_profile_secret_scope(Path(hermes_home))
-        active_scope_home = current_secret_scope_home()
-        # A single-profile CLI can supply OPENVIKING_* through its shell or
-        # service environment. Keep that path, but never take process values
-        # while another profile is active or a multiplexed gateway is serving.
+        # Process OPENVIKING_* belongs to the launch home, even when another
+        # profile's context is active. A routed provider must never inherit it.
         if (not is_multiplex_active()
-                and Path(get_hermes_home()).resolve() == Path(hermes_home).resolve()
-                and (active_scope_home is None or Path(active_scope_home).resolve() == Path(hermes_home).resolve())):
+                and _get_launch_hermes_home().resolve() == Path(hermes_home).resolve()):
             for key, value in os.environ.items():
                 if key.startswith("OPENVIKING_"):
                     env.setdefault(key, value)
@@ -873,8 +874,7 @@ def _resolve_connection_settings(provider_config: Optional[dict] = None, *, env:
     api_key = api_key_env.strip() if api_key_env is not None else ovcli_values.get("api_key", "")
     account = layered("account", env_authoritative=True)
     user = layered("user", env_authoritative=True)
-    if not api_key or env is None:
-        account, user = account or "default", user or "default"
+    account, user = account or "default", user or "default"
     return {
         "endpoint": _normalize_openviking_url(layered("endpoint", _DEFAULT_ENDPOINT)),
         "api_key": api_key,
@@ -975,8 +975,7 @@ def _validate_openviking_setup_values(values: dict, *, require_api_key: bool = F
         return False, "Remote OpenViking configs require an API key.", None
     account = _clean_config_value(values.get("account"))
     user = _clean_config_value(values.get("user"))
-    if not api_key:
-        account, user = account or "default", user or "default"
+    account, user = account or "default", user or "default"
     try:
         client = _VikingClient(endpoint, api_key, account=account, user=user,
                                agent=_clean_config_value(values.get("agent")) or _DEFAULT_AGENT)

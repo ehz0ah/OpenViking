@@ -131,6 +131,102 @@ def test_initialized_profile_owns_connection_and_recall_across_other_profile(ext
             worker.join(timeout=5)
 
 
+def test_routed_profile_does_not_borrow_launch_process_env(external_provider, monkeypatch):
+    from agent.secret_scope import (
+        build_profile_secret_scope,
+        get_secret,
+        reset_secret_scope,
+        serves_routed_profile,
+        set_secret_scope,
+    )
+    from hermes_constants import (
+        get_routing_process_hermes_home,
+        pin_process_hermes_home,
+        process_hermes_home_is_pinned,
+        reset_hermes_home_override,
+        set_hermes_home_override,
+    )
+
+    launch_home, launch_provider, launch_module, _ = external_provider("launch")
+    routed_home, routed_provider, routed_module, _ = external_provider("routed")
+    launch_provider._hermes_home, launch_provider._hermes_home_bound = str(launch_home), True
+    routed_provider._hermes_home, routed_provider._hermes_home_bound = str(routed_home), True
+    monkeypatch.setattr("agent.secret_scope._MULTIPLEX_ACTIVE", False)
+    monkeypatch.setenv("HERMES_HOME", str(launch_home))
+    monkeypatch.setenv("OPENVIKING_ENDPOINT", "http://127.0.0.1:19521")
+    monkeypatch.setenv("OPENVIKING_API_KEY", "launch-key")
+    prior_pin = get_routing_process_hermes_home() if process_hermes_home_is_pinned() else None
+    pin_process_hermes_home(launch_home)
+    home_token = set_hermes_home_override(routed_home)
+    scope_token = set_secret_scope(build_profile_secret_scope(routed_home), profile_home=str(routed_home))
+    try:
+        # Some hosts mirror the routed home into process env; the pinned launch
+        # home, not the current override or env mirror, owns process credentials.
+        monkeypatch.setenv("HERMES_HOME", str(routed_home))
+        assert serves_routed_profile()
+        assert get_secret("OPENVIKING_API_KEY") is None
+        routed = routed_provider._resolve_bound_connection_settings()
+        launch = launch_provider._resolve_bound_connection_settings()
+        assert (routed["endpoint"], routed["api_key"]) == (routed_module._DEFAULT_ENDPOINT, "")
+        assert (launch["endpoint"], launch["api_key"]) == ("http://127.0.0.1:19521", "launch-key")
+    finally:
+        reset_secret_scope(scope_token)
+        reset_hermes_home_override(home_token)
+        pin_process_hermes_home(prior_pin)
+
+
+def test_api_key_trusted_retry_keeps_default_identity(external_provider):
+    _, _, module, _ = external_provider("trusted-retry")
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            account = self.headers.get("X-OpenViking-Account")
+            user = self.headers.get("X-OpenViking-User")
+            requests.append((self.path, account, user))
+            if self.path == "/health":
+                status, payload = 200, {"status": "ok", "healthy": True, "version": "0.4.18", "auth_mode": "trusted"}
+            elif account == user == "default":
+                status, payload = 200, {"result": {}}
+            else:
+                status, payload = 400, {"error": {"code": "INVALID_ARGUMENT", "message":
+                    "Trusted mode requests must include X-OpenViking-Account and X-OpenViking-User."}}
+            raw = json.dumps(payload).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, *_args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    endpoint = f"http://127.0.0.1:{server.server_port}"
+    try:
+        settings = module._resolve_connection_settings({}, env={"OPENVIKING_API_KEY": "test-key"})
+        assert (settings["account"], settings["user"]) == ("default", "default")
+        client = module._VikingClient(endpoint, settings["api_key"],
+                                      account=settings["account"], user=settings["user"])
+        assert client.validate_auth() == {"result": {}}
+        assert requests[:2] == [
+            ("/api/v1/system/status", None, None),
+            ("/api/v1/system/status", "default", "default"),
+        ]
+        ok, message, role = module._validate_openviking_setup_values(
+            {"endpoint": endpoint, "api_key": "test-key"})
+        assert (ok, message, role) == (True, "", "root")
+        assert all((account, user) in ((None, None), ("default", "default"))
+                   for _, account, user in requests)
+        assert requests[-1] == ("/api/v1/admin/accounts", "default", "default")
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+
+
 @pytest.mark.parametrize("target", ["memory", "user"])
 def test_external_native_memory_lifecycle_survives_restart(external_provider, target):
     from agent.memory_manager import MemoryManager
