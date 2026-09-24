@@ -442,7 +442,7 @@ export function shapeCapturePayload(payload, role, cfg = {}, { toolNameById = {}
   // Some hosts supply an array of plain strings. It has text but no structured
   // parts, so use a temporary part for the same filter verdict.
   const fallback = sourceParts.length === 0 && sanitizedText
-    ? [{ type: "text", text: sanitizedText }]
+    ? [{ type: "text", text: rawText }]
     : [];
   const shaped = shapeCaptureParts(sourceParts.length ? sourceParts : fallback, role, cfg);
   if (shaped.dropped) return { parts: [], text: "", signalText: "", dropped: true };
