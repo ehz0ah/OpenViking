@@ -7,6 +7,7 @@ import {
   findLastHumanTurnIndex,
   filterCaptureParts,
   sanitizeCapturedText,
+  shapeCapturePayload,
   shouldCaptureText,
 } from "./lib/capture-utils.mjs"
 
@@ -240,6 +241,40 @@ test("filterCaptureParts never judges a turn that carries no text", () => {
   assert.equal(shaped.dropped, false)
   assert.deepEqual(shaped.parts, [TOOL_PART])
   assert.equal(filterCaptureParts([], "user", { captureFilters: ["k/x/"] }).dropped, false)
+})
+
+test("shared capture filters sanitized conversation text before keep and drop", () => {
+  const payload = { role: "user", content: "<openviking-context>approved</openviking-context>Remember private details." }
+  const kept = shapeCapturePayload(payload, "user", { captureFilters: ["k/approved/"] })
+  assert.equal(kept.dropped, true)
+  assert.deepEqual(extractCaptureTurns([{ payload }], { captureFilters: ["k/approved/"] }), [])
+
+  const dropped = shapeCapturePayload(payload, "user", { captureFilters: ["d/approved/"] })
+  assert.equal(dropped.dropped, false)
+  assert.deepEqual(dropped.parts, [{ type: "text", text: "Remember private details." }])
+  assert.equal(dropped.text, "Remember private details.")
+})
+
+test("shared capture filters aggregate text and leave tool payloads intact", () => {
+  const payload = { role: "assistant", content: [
+    { type: "text", text: "Remember secret" },
+    { type: "toolCall", id: "call-1", name: "lookup", arguments: { secret: true } },
+  ] }
+  assert.equal(shapeCapturePayload(payload, "assistant", {
+    captureFilters: ["d/secret/"],
+  }, { faithful: true }).dropped, true)
+
+  const shaped = shapeCapturePayload(payload, "assistant", {
+    captureFilters: ["s/secret/[redacted]/g"],
+  }, { faithful: true })
+  assert.equal(shaped.text, "Remember [redacted]")
+  assert.equal(shaped.parts[1].tool_input.secret, true)
+
+  const toolOnly = shapeCapturePayload({ role: "assistant", content: payload.content.slice(1) }, "assistant", {
+    captureFilters: ["k/never matches/"],
+  }, { faithful: true })
+  assert.equal(toolOnly.dropped, false)
+  assert.equal(toolOnly.parts[0].type, "tool")
 })
 
 test("shouldCaptureText reports a filtered drop and can be asked to skip filters", () => {

@@ -409,6 +409,36 @@ test("captured message parts are not retained in the session state file", async 
   })
 })
 
+test("OpenCode capture filters sanitized text before sending", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-filters-", async (dir) => {
+      const manager = createMemorySessionManager({
+        config: { ...baseConfig(endpoint), captureFilters: ["k/approved/", "s/secret/[redacted]/g"] },
+        pluginRoot: dir,
+      })
+      await manager.init()
+      for (const [id, text] of [
+        ["removed", "<openviking-context>approved</openviking-context>Remember secret details."],
+        ["kept", "Remember approved secret details."],
+      ]) {
+        await manager.handleEvent({ type: "message.updated", properties: {
+          info: { id, sessionID: "oc-filters", role: "user" },
+        } })
+        await manager.handleEvent({ type: "message.part.updated", properties: {
+          part: { id: `part-${id}`, messageID: id, sessionID: "oc-filters", type: "text", text },
+        } })
+      }
+      await manager.handleEvent({ type: "session.idle", sessionID: "oc-filters" })
+      const sent = requests.find((request) => request.url === "/api/v1/sessions/oc-oc-filters/messages/batch")
+      assert.ok(sent)
+      assert.deepEqual(JSON.parse(sent.body).messages, [
+        { role: "user", content: "Remember approved [redacted] details." },
+      ])
+      await manager.flushAll({ commit: false })
+    })
+  })
+})
+
 test("concurrent saves never race the shared state file (#3877)", async (t) => {
   // Widen the race window: concurrent saveState() calls share the same
   // `${statePath}.tmp` temp file. A slow writeFile keeps the shared .tmp

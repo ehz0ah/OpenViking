@@ -1,11 +1,9 @@
 import fs from "fs"
 import path from "path"
 import {
-  extractPartsFromPayload,
   extractTextFromPayload,
   isCaptureEnabled,
-  filterCaptureParts,
-  shouldCaptureText,
+  shapeCapturePayload,
 } from "./shared/capture-utils.mjs"
 import {
   deriveHarnessSessionId,
@@ -384,22 +382,12 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!role) return null
     if (role === "assistant" && !config.captureAssistantTurns) return null
 
-    const rawText = partsRaw
-      .map((part) => extractTextFromPayload(part, { toolMaxChars: config.captureToolMaxChars }))
-      .filter(Boolean)
-      .join("\n\n")
-    const captureParts = partsRaw.flatMap((part) => extractPartsFromPayload(part, {
-      toolMaxChars: config.captureToolMaxChars,
-    }))
-    // Apply captureFilters (sed-style redaction rules) to the extracted parts,
-    // mirroring the Codex plugin's reference flow in shared/capture-utils.mjs.
-    const shaped = filterCaptureParts(captureParts, role, config)
-    if (shaped.dropped) return null
-    const decision = shouldCaptureText(rawText, role, config, { filters: shaped.parts.length === 0 })
-    if (!decision.shouldCapture && shaped.parts.length === 0) return null
-    const body = shaped.parts.length > 0
+    const shaped = shapeCapturePayload({ role, content: partsRaw }, role, config)
+    const hasToolPart = shaped.parts.some((part) => part.type !== "text")
+    if (shaped.dropped || (!shaped.text && !hasToolPart)) return null
+    const body = hasToolPart
       ? { role, parts: shaped.parts }
-      : { role, content: decision.text }
+      : { role, content: shaped.text }
     const peerId = effectivePeerId(config)
     if (peerId) body.peer_id = peerId
     return body

@@ -136,7 +136,7 @@ for (const [mode, modeConfig] of [
     ["empty substitution", ["s/^.*$//"], "Remember secret for later.", null],
     ["single substitution", ["s/secret/secret-safe/"], "Remember secret for later.", "Remember secret-safe for later."],
     ["ordered rules", ["s/secret/blocked/", "d/blocked/"], "Remember secret for later.", null],
-    ["filter before sanitation", ["d/secret/"], "<openviking-context>secret</openviking-context>Remember safe settings.", null],
+    ["filter after sanitation", ["d/secret/"], "<openviking-context>secret</openviking-context>Remember safe settings.", "Remember safe settings."],
     ["filter before truncation", ["d/secret/"], `${"Safe settings. ".repeat(10)}secret`, null],
   ]) {
     for (const fallback of [false, true]) {
@@ -245,5 +245,14 @@ for (const [mode, modeConfig] of [
       { role: "assistant", content: "prefix [OpenViking-memory] synced" },
     ], 0, { ...modeConfig, captureFilters: ["s/^prefix //"] });
     assert.deepEqual(payloads, []);
+  });
+
+  test(`${mode} capture cannot satisfy keep with removed context`, () => {
+    const branch = [{ role: "user", content: "<openviking-context>approved</openviking-context>Remember private details." }];
+    const result = extractBranchCapturePayloads(branch, 0, {
+      ...modeConfig, captureFilters: ["k/approved/"],
+    });
+    assert.deepEqual(result.payloads, []);
+    assert.equal(result.nextEntryCount, 1);
   });
 }
