@@ -443,7 +443,9 @@ export function shapeCapturePayload(payload, role, cfg = {}, { toolNameById = {}
   if (shaped.dropped) return { parts: [], text: "", signalText: "", dropped: true };
 
   const parts = sourceParts.length ? shaped.parts : [];
-  const decisionText = hasTextPart || fallback.length
+  const hasApplicableFilter = compileInputFilters(cfg.captureFilters).rules
+    .some((rule) => !rule.scope || rule.scope === role);
+  const decisionText = hasApplicableFilter && (hasTextPart || fallback.length)
     ? shaped.parts.filter((part) => part.type === "text").map((part) => part.text).join("\n\n")
     : sanitizedText;
   const decision = faithful

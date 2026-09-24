@@ -277,6 +277,21 @@ test("shared capture filters aggregate text and leave tool payloads intact", () 
   assert.equal(toolOnly.parts[0].type, "tool")
 })
 
+test("shared capture keeps mixed-message text when no rule applies to its role", () => {
+  const payload = { role: "assistant", content: [
+    { type: "text", text: "Run this." },
+    { type: "toolCall", id: "call-1", name: "lookup", arguments: { q: "x" } },
+  ] }
+  const baseline = shapeCapturePayload(payload, "assistant", {}, { faithful: true })
+  assert.match(baseline.text, /^Run this\.\n\n\[tool-call lookup\]/)
+  assert.deepEqual(shapeCapturePayload(payload, "assistant", {
+    captureFilters: ["user:d/.*/"],
+  }, { faithful: true }), baseline)
+  assert.equal(shapeCapturePayload(payload, "assistant", {
+    captureFilters: ["assistant:s/Run/Do/"],
+  }, { faithful: true }).text, "Do this.")
+})
+
 test("shouldCaptureText reports a filtered drop and can be asked to skip filters", () => {
   const cfg = { captureFilters: ["user:d/^\\/compact\\b/", "s/^ultrathink\\s+//"] }
   assert.deepEqual(shouldCaptureText("/compact the thread", "user", cfg), {

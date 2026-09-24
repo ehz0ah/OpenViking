@@ -123,6 +123,18 @@ test("tool-only payloads carry tool output once, not duplicated as text", () => 
   assert.equal(toolParts[0].tool_output, output);
 });
 
+test("mixed text and tool capture keeps its original text without filters", () => {
+  const { payloads } = extractBranchCapturePayloads([{
+    role: "assistant",
+    content: [
+      { type: "text", text: "Run this." },
+      { type: "toolCall", id: "call-1", name: "lookup", arguments: { q: "x" } },
+    ],
+  }], 0, { faithfulCapture: true });
+  assert.match(payloads[0].parts[0].text, /^Run this\.\n\n\[tool-call lookup\]/);
+  assert.equal(payloads[0].parts[1].tool_name, "lookup");
+});
+
 for (const [mode, modeConfig] of [
   ["normal", {}],
   ["takeover", { takeoverEnabled: true }],

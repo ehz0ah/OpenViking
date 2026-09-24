@@ -6,6 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createMemorySessionManager } from "../lib/memory-session.mjs"
+import { contextMessageEvents } from "../lib/v2-events.mjs"
 import { initLogger } from "../lib/utils.mjs"
 
 async function withTempDir(prefix, fn) {
@@ -421,12 +422,9 @@ test("OpenCode capture filters sanitized text before sending", async () => {
         ["removed", "<openviking-context>approved</openviking-context>Remember secret details."],
         ["kept", "Remember approved secret details."],
       ]) {
-        await manager.handleEvent({ type: "message.updated", properties: {
-          info: { id, sessionID: "oc-filters", role: "user" },
-        } })
-        await manager.handleEvent({ type: "message.part.updated", properties: {
-          part: { id: `part-${id}`, messageID: id, sessionID: "oc-filters", type: "text", text },
-        } })
+        for (const event of contextMessageEvents("oc-filters", { id, type: "user", text })) {
+          await manager.handleEvent(event)
+        }
       }
       await manager.handleEvent({ type: "session.idle", sessionID: "oc-filters" })
       const sent = requests.find((request) => request.url === "/api/v1/sessions/oc-oc-filters/messages/batch")
