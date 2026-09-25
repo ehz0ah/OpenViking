@@ -713,7 +713,7 @@ def _mcp_media_download_hint(uri: str) -> str:
 
 
 @_mcp_error_results(structured_output=False)
-@mcp.tool(structured_output=False)
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS, structured_output=False)
 async def read(
     uris: str | list[str],
     offset: int = 0,
@@ -1249,8 +1249,20 @@ async def _maybe_sitemap_hint(path: str) -> str:
         return ""
 
 
+def _resource_add_error(result: Any) -> _MCPToolFailure | None:
+    if not isinstance(result, dict) or result.get("status") != "error":
+        return None
+    errors = result.get("errors")
+    detail = (
+        result.get("message")
+        or (errors[0] if isinstance(errors, list) and errors else None)
+        or "resource processing failed"
+    )
+    return _mcp_failure(f"Error adding resource: {detail}")
+
+
 @_mcp_error_results()
-@mcp.tool()
+@mcp.tool(annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def add_resource(
     path: str = "",
     temp_file_id: str = "",
@@ -1385,16 +1397,9 @@ async def add_resource(
             return _mcp_failure(f"Error: {exc}")
         except Exception as exc:
             return _mcp_failure(f"Error adding resource: {exc}")
-        # add_resource returns a business-error dict (no raise) for parse/finalize failures;
-        # surface it instead of reporting a false success.
-        if isinstance(result, dict) and result.get("status") == "error":
-            errors = result.get("errors")
-            detail = (
-                result.get("message")
-                or (errors[0] if isinstance(errors, list) and errors else None)
-                or "resource processing failed"
-            )
-            return _mcp_failure(f"Error adding resource: {detail}")
+        error = _resource_add_error(result)
+        if error is not None:
+            return error
         root_uri = result.get("root_uri", "") if isinstance(result, dict) else ""
         return (
             f"Resource added: {root_uri}"
@@ -1439,6 +1444,9 @@ async def add_resource(
             )
         except Exception as exc:
             return _mcp_failure(f"Error adding resource: {exc}")
+        error = _resource_add_error(result)
+        if error is not None:
+            return error
         root_uri = result.get("root_uri", "")
         task_id = result.get("task_id", "")
         if watch_interval > 0:
@@ -1528,7 +1536,9 @@ async def add_resource(
 
 def _format_skill_install_result(result: Dict[str, Any], *, list_only: bool) -> str:
     if result.get("status") == "error":
-        return f"Error adding skill: {result.get('message') or 'skill processing failed'}"
+        return _mcp_failure(
+            f"Error adding skill: {result.get('message') or 'skill processing failed'}"
+        )
     if list_only:
         found = result.get("skills") or []
         lines = [f"Skills in the source ({len(found)}); nothing was installed:"]
@@ -1544,6 +1554,7 @@ def _format_skill_install_result(result: Dict[str, Any], *, list_only: bool) -> 
     return "\n".join(lines)
 
 
+@_mcp_error_results()
 @mcp.tool(annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def add_skill(
     data: str = "",
@@ -1587,21 +1598,23 @@ async def add_skill(
     ctx = _get_ctx()
     path = path.strip()
     if data.strip() and path:
-        return "Error: pass either 'data' (SKILL.md text) or 'path', not both."
+        return _mcp_failure("Error: pass either 'data' (SKILL.md text) or 'path', not both.")
     if not data.strip() and not path:
-        return "Error: provide 'data' (full SKILL.md text) or 'path' (Git URL or local path)."
+        return _mcp_failure(
+            "Error: provide 'data' (full SKILL.md text) or 'path' (Git URL or local path)."
+        )
     if data.strip() and looks_like_local_path(data.strip()):
-        return (
+        return _mcp_failure(
             f"Error: 'data' looks like a file path. Pass it as add_skill(path=\"{data.strip()}\")."
         )
     if path.startswith("viking://"):
-        return (
+        return _mcp_failure(
             "Error: 'path' must be a Git URL or a local path. To copy a skill already in "
             "OpenViking, read its SKILL.md and pass the text as 'data'."
         )
     is_git = path.startswith(GIT_SKILL_SOURCE_PREFIXES)
     if path and not is_git and is_remote_resource_source(path):
-        return (
+        return _mcp_failure(
             f"Error: unsupported skill source '{path}'. Pass a Git URL "
             f"({', '.join(GIT_SKILL_SOURCE_PREFIXES)}) or a local path."
         )
@@ -1612,7 +1625,7 @@ async def add_skill(
             # Fail here, not after a one-time upload token is spent on a root the installer rejects.
             target = SkillProcessor._resolve_skill_root_uri(ctx, target)  # noqa: SLF001
     except (InvalidArgumentError, PermissionDeniedError) as exc:
-        return f"Error: {exc}"
+        return _mcp_failure(f"Error: {exc}")
 
     if data.strip() or is_git:
         try:
@@ -1629,9 +1642,9 @@ async def add_skill(
                 ),
             )
         except (InvalidArgumentError, PermissionDeniedError) as exc:
-            return f"Error: {exc}"
+            return _mcp_failure(f"Error: {exc}")
         except Exception as exc:
-            return f"Error adding skill: {exc}"
+            return _mcp_failure(f"Error adding skill: {exc}")
         return _format_skill_install_result(result, list_only=list_only)
 
     server_config = get_server_config()
@@ -1710,7 +1723,7 @@ async def add_skill(
 
 
 @_mcp_error_results()
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def list_watches() -> str:
     """List watch tasks (auto-refresh subscriptions) visible to the current user."""
     service = get_service()
@@ -1743,7 +1756,7 @@ async def list_watches() -> str:
 
 
 @_mcp_error_results()
-@mcp.tool()
+@mcp.tool(annotations=_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def cancel_watch(to_uri: str) -> str:
     """Cancel a watch task by its target URI (e.g. "viking://resources/volcengine/OpenViking")."""
     from openviking.resource import watch_manager as _wm_mod
@@ -1786,6 +1799,7 @@ async def cancel_watch(to_uri: str) -> str:
 # -- grep ------------------------------------------------------------------
 
 
+@_mcp_error_results()
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def grep(
     uri: str, pattern: str | list[str], case_insensitive: bool = False, node_limit: int = 10
@@ -1834,10 +1848,14 @@ async def grep(
     failure_lines = [f"  {p}: {error}" for p, error in failures]
 
     if not merged:
+        if failures and len(failures) == len(results):
+            return _mcp_failure("grep failed for every pattern:\n" + "\n".join(failure_lines))
         if failures:
-            # Nothing was searched successfully, so "no matches" would be an answer to a
-            # question that was never asked.
-            return "grep failed for every pattern:\n" + "\n".join(failure_lines)
+            successful = [p for p, _, error in results if error is None]
+            return (
+                f"No matches found for successful pattern(s): {', '.join(successful)}\n"
+                "Patterns that could not be searched:\n" + "\n".join(failure_lines)
+            )
         return f"No matches found for pattern(s): {', '.join(patterns)}"
 
     lines = [f"Found {total} match(es) across {len(patterns)} pattern(s):"]
@@ -1856,7 +1874,7 @@ async def grep(
 
 
 @_mcp_error_results()
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> str:
     """Find viking:// files matching a glob pattern (e.g. **/*.md, *.py). Use this for filename matching; use the search tool for content-based retrieval."""
     service = get_service()

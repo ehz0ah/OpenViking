@@ -67,6 +67,22 @@ async def _call_tool(name: str, arguments: dict) -> dict:
             "Error: storage offline",
             id="glob-backend",
         ),
+        pytest.param(
+            "add_skill",
+            {},
+            SimpleNamespace(),
+            "Error: provide 'data' (full SKILL.md text) or 'path' (Git URL or local path).",
+            id="skill-validation",
+        ),
+        pytest.param(
+            "grep",
+            {"uri": "viking://resources", "pattern": "needle"},
+            SimpleNamespace(
+                fs=SimpleNamespace(grep=AsyncMock(side_effect=RuntimeError("storage offline")))
+            ),
+            "grep failed for every pattern:\n  needle: RuntimeError: storage offline",
+            id="grep-all-failed",
+        ),
     ],
 )
 async def test_whole_call_failure_sets_error_result(monkeypatch, name, arguments, service, message):
@@ -80,6 +96,67 @@ async def test_whole_call_failure_sets_error_result(monkeypatch, name, arguments
     assert result["isError"] is True
     assert result["content"] == [{"type": "text", "text": message}]
     assert result["structuredContent"] == {"result": message}
+
+
+async def test_remote_resource_business_failure_sets_error_result(monkeypatch):
+    service = SimpleNamespace(
+        resources=SimpleNamespace(
+            add_resource=AsyncMock(
+                return_value={"status": "error", "message": "processor rejected"}
+            )
+        )
+    )
+    monkeypatch.setattr(mcp_endpoint, "get_service", lambda: service)
+    arguments = {"path": "https://example.com/article"}
+
+    direct_result = await mcp_endpoint.add_resource(**arguments)
+    result = await _call_tool("add_resource", arguments)
+
+    assert direct_result == "Error adding resource: processor rejected"
+    assert type(direct_result) is str
+    assert result["isError"] is True
+    assert result["content"] == [{"type": "text", "text": direct_result}]
+
+
+async def test_skill_install_business_failure_sets_error_result(monkeypatch):
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "install_skills",
+        AsyncMock(return_value={"status": "error", "message": "invalid skill"}),
+    )
+    arguments = {"data": "---\nname: example\ndescription: Example\n---\nBody"}
+
+    direct_result = await mcp_endpoint.add_skill(**arguments)
+    result = await _call_tool("add_skill", arguments)
+
+    assert direct_result == "Error adding skill: invalid skill"
+    assert type(direct_result) is str
+    assert result["isError"] is True
+    assert result["content"] == [{"type": "text", "text": direct_result}]
+
+
+async def test_grep_partial_failure_without_matches_stays_partial(monkeypatch):
+    async def grep(_uri, pattern, **_kwargs):
+        if pattern == "bad":
+            raise RuntimeError("storage offline")
+        return {"matches": []}
+
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(grep=grep)),
+    )
+    arguments = {"uri": "viking://resources", "pattern": ["good", "bad"]}
+
+    direct_result = await mcp_endpoint.grep(**arguments)
+    result = await _call_tool("grep", arguments)
+
+    assert direct_result == (
+        "No matches found for successful pattern(s): good\n"
+        "Patterns that could not be searched:\n  bad: RuntimeError: storage offline"
+    )
+    assert result["isError"] is False
+    assert result["content"] == [{"type": "text", "text": direct_result}]
 
 
 async def test_read_all_failures_set_error_result(monkeypatch):
