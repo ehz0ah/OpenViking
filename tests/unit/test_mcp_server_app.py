@@ -95,7 +95,7 @@ async def test_mcp_dispatch_preserves_expected_openviking_error_message():
 
 
 @pytest.mark.asyncio
-async def test_mcp_tool_contract_is_unchanged():
+async def test_mcp_error_adapter_preserves_tool_contract():
     tools = await mcp_endpoint.mcp.list_tools()
     assert [tool.name for tool in tools] == [
         "find",
