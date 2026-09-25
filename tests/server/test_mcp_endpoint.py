@@ -2081,9 +2081,9 @@ async def test_edit_missing_old_string_fails(service):
 async def test_edit_line_ending_mismatch_says_so(service):
     uri = "viking://resources/test_edit_crlf.md"
     await write(uri=uri, content="line 1\r\nline 2\r\n")
-    with pytest.raises(InvalidArgumentError, match="CRLF/LF"):
+    with _raises_tool_error(InvalidArgumentError, match="CRLF/LF"):
         await edit(uri=uri, old_string="line 1\nline 2\n", new_string="x")
-    with pytest.raises(InvalidArgumentError, match=r"not found in \S+\. Re-read"):
+    with _raises_tool_error(InvalidArgumentError, match=r"not found in \S+\. Re-read"):
         await edit(uri=uri, old_string="zzz", new_string="x")
 
 

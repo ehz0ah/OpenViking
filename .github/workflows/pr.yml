@@ -194,7 +194,7 @@ jobs:
             echo "langchain_changed=false" >> $GITHUB_OUTPUT
           fi
 
-          MCP_PATTERN="bot/vikingbot/agent/tools/mcp\.py|openviking/server/(app|config|mcp_endpoint)\.py|openviking/server/(auth|oauth)/|tests/unit/test_vikingbot_mcp\.py|tests/unit/test_mcp_server_app\.py|tests/server/test_mcp_.*\.py|tests/server/test_vikingbot_mcp_transports\.py|tests/server/oauth/|tests/test_server_config_loader\.py|pyproject\.toml|uv\.lock|\.github/workflows/pr\.yml"
+          MCP_PATTERN="bot/vikingbot/agent/tools/mcp\.py|openviking/server/(app|config|mcp_endpoint)\.py|openviking/server/(auth|oauth)/|tests/unit/test_vikingbot_mcp\.py|tests/unit/test_mcp_.*\.py|tests/server/test_mcp_.*\.py|tests/server/test_vikingbot_mcp_transports\.py|tests/server/oauth/|tests/test_server_config_loader\.py|pyproject\.toml|uv\.lock|\.github/workflows/pr\.yml"
           MCP_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$MCP_PATTERN" || true)
 
           if [ -n "$MCP_CHANGED_FILES" ]; then
@@ -303,7 +303,7 @@ jobs:
         run: >-
           uv run pytest -q -o addopts=''
           tests/unit/test_vikingbot_mcp.py
-          tests/unit/test_mcp_server_app.py
+          tests/unit/test_mcp_*.py
           tests/server/test_mcp_*.py
           tests/server/test_vikingbot_mcp_transports.py
           tests/server/oauth
