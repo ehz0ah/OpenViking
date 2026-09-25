@@ -196,7 +196,6 @@ async def connect_mcp_servers(
                     }
                     return httpx2.AsyncClient(
                         headers=merged_headers or None,
-                        follow_redirects=True,
                         timeout=timeout,
                         auth=auth,
                     )
@@ -210,7 +209,6 @@ async def connect_mcp_servers(
                 http_client = await stack.enter_async_context(
                     httpx2.AsyncClient(
                         headers=cfg.headers or None,
-                        follow_redirects=True,
                         timeout=None,
                     )
                 )

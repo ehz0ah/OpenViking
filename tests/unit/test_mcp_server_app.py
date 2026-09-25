@@ -1,6 +1,9 @@
+from inspect import signature, unwrap
 from types import SimpleNamespace
 
 import pytest
+from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
 
 import openviking
@@ -75,3 +78,63 @@ def test_server_config_rejects_non_positive_mcp_request_body_limit(value):
 
 def test_mcp_server_advertises_openviking_version():
     assert mcp_endpoint.mcp.version == openviking.__version__
+
+
+@pytest.mark.asyncio
+async def test_mcp_dispatch_preserves_expected_openviking_error_message():
+    with pytest.raises(ToolError) as exc_info:
+        await mcp_endpoint.mcp.call_tool(
+            "list",
+            {"uri": "viking://", "offset": -1},
+        )
+
+    assert type(exc_info.value) is ToolError
+    assert str(exc_info.value) == (
+        "Error executing tool list: offset must be greater than or equal to 0"
+    )
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_contract_is_unchanged():
+    tools = await mcp_endpoint.mcp.list_tools()
+    assert [tool.name for tool in tools] == [
+        "find",
+        "search",
+        "read",
+        "list",
+        "tree",
+        "remember",
+        "write",
+        "edit",
+        "add_resource",
+        "add_skill",
+        "list_watches",
+        "cancel_watch",
+        "grep",
+        "glob",
+        "forget",
+        "health",
+    ]
+
+    baseline = MCPServer("openviking-schema-baseline")
+    for registered_tool in mcp_endpoint.mcp._tool_manager.list_tools():
+        assert hasattr(registered_tool.fn, "__wrapped__")
+        assert signature(registered_tool.fn) == signature(unwrap(registered_tool.fn))
+        baseline.add_tool(
+            unwrap(registered_tool.fn),
+            name=registered_tool.name,
+            title=registered_tool.title,
+            description=registered_tool.description,
+            annotations=registered_tool.annotations,
+            icons=registered_tool.icons,
+            meta=registered_tool.meta,
+            structured_output=registered_tool.output_schema is not None,
+        )
+
+    for baseline_tool in baseline._tool_manager.list_tools():
+        baseline_tool.parameters = mcp_endpoint._portable_schema(baseline_tool.parameters)
+
+    baseline_tools = await baseline.list_tools()
+    assert [tool.model_dump(mode="json", by_alias=True) for tool in tools] == [
+        tool.model_dump(mode="json", by_alias=True) for tool in baseline_tools
+    ]

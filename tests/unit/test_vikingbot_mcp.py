@@ -83,7 +83,6 @@ async def test_connect_mcp_servers_uses_mcp2_http_transport(monkeypatch, transpo
             auth=None,
         )
         observed["client_is_httpx2"] = isinstance(client, httpx2.AsyncClient)
-        observed["follow_redirects"] = client.follow_redirects
         observed["configured_header"] = client.headers.get("X-Configured")
         observed["sdk_header"] = client.headers.get("X-MCP-SDK")
         async with client:
@@ -92,7 +91,6 @@ async def test_connect_mcp_servers_uses_mcp2_http_transport(monkeypatch, transpo
     @asynccontextmanager
     async def fake_streamable_http_client(url, *, http_client):
         observed["client_is_httpx2"] = isinstance(http_client, httpx2.AsyncClient)
-        observed["follow_redirects"] = http_client.follow_redirects
         observed["configured_header"] = http_client.headers.get("X-Configured")
         yield object(), object()
 
@@ -152,7 +150,6 @@ async def test_connect_mcp_servers_uses_mcp2_http_transport(monkeypatch, transpo
         await connect_mcp_servers({"openviking": config}, registry, stack)
 
     assert observed["client_is_httpx2"] is True
-    assert observed["follow_redirects"] is True
     assert observed["configured_header"] == "config-value"
     if transport_type == "sse":
         assert observed["sdk_header"] == "sdk-value"

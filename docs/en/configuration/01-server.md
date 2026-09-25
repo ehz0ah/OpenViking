@@ -293,7 +293,7 @@ When `base_url` is configured, OV sends the current user's OV API key in `X-API-
 | `workers` | integer | `1` | Worker process count |
 | `executor_threads` | non-negative integer | `0` | Maximum threads in each worker process's default asyncio executor; `0` uses Python's default sizing policy |
 | `timeout_keep_alive` | integer (seconds) | `5` | Idle HTTP keep-alive timeout; raise it above the upstream's idle-connection lifetime |
-| `mcp_max_request_body_size_bytes` | positive integer | `4194304` | Maximum accepted MCP Streamable HTTP POST body size in bytes |
+| `mcp_max_request_body_size_bytes` | positive integer | `4194304` | Maximum accepted MCP Streamable HTTP request body size in bytes |
 | `auth_mode` | `dev`, `api_key`, `trusted` / `null` | `null` | Auth mode; null is inferred from `root_api_key` |
 | `root_api_key` | string / `null` | `null` | Root key; setting it defaults auth to `api_key` |
 | `cors_origins` | string[] | `["*"]` | Allowed origins |
@@ -304,7 +304,9 @@ When `base_url` is configured, OV sends the current user's OV API key in `X-API-
 | `upload_signed_ttl_seconds` | integer | `600` | Signed upload URL lifetime |
 | `temp_upload.default_mode` | `"local"` / `"shared"` | `"local"` | Temporary upload storage |
 
-MCP requests larger than `mcp_max_request_body_size_bytes` return HTTP 413 before JSON parsing or tool dispatch. Keep the smallest limit required by your clients. Increase it only for trusted workloads that intentionally send larger MCP messages. Reverse proxies can enforce a lower effective limit. For large resource or skill files, use the upload flow returned by the MCP tools instead of embedding the file in an MCP request.
+OpenViking applies `mcp_max_request_body_size_bytes` to request bodies for every MCP Streamable HTTP method. The 4 MiB default is a new limit introduced with the MCP SDK v2 migration; the previous MCP SDK did not impose a request-body limit here. Oversized requests return HTTP 413 before JSON parsing or tool dispatch. Keep the smallest limit required by your clients, and increase it only for trusted workloads. Reverse proxies can enforce a lower effective limit.
+
+For large resource or skill files, use the upload flow returned by `add_resource` or `add_skill`. The `write` tool has no upload fallback. A trusted client that must send more than 4 MiB inline must increase this limit and any proxy limit, or split the content into smaller `write` calls using `create`/`replace` followed by `append`.
 
 ### Encryption and API Key Hashing
 

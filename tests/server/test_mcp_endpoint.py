@@ -9,12 +9,14 @@ and service dependency, avoiding MCP protocol complexity.
 
 import base64
 import re
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from fastapi import FastAPI
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import AudioContent, ImageContent, TextContent
 from starlette.routing import Route
 
@@ -71,6 +73,13 @@ def _tool_content(result):
 
 def _wire_content(content):
     return content.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+@contextmanager
+def _raises_tool_error(cause_type, match=None):
+    with pytest.raises(ToolError, match=match) as exc_info:
+        yield exc_info
+    assert isinstance(exc_info.value.__cause__, cause_type)
 
 
 @pytest.fixture(autouse=True)
@@ -663,7 +672,7 @@ async def test_find_tool_inlines_visible_content_when_requested(service, monkeyp
 
 
 async def test_search_tool_rejects_read_content_in_context_mode():
-    with pytest.raises(InvalidArgumentError, match="read_content"):
+    with _raises_tool_error(InvalidArgumentError, match="read_content"):
         await mcp_endpoint.search(query="visible", mode="context", read_content=True)
 
 
@@ -765,7 +774,7 @@ async def test_search_context_mode_returns_assembled_context(service, monkeypatc
 
 
 async def test_search_context_mode_rejects_target_uri():
-    with pytest.raises(InvalidArgumentError, match="target_uri.*mode='context'"):
+    with _raises_tool_error(InvalidArgumentError, match="target_uri.*mode='context'"):
         await search(
             query="what happened",
             mode="context",
@@ -1895,7 +1904,7 @@ async def test_forget_directory_without_recursive_fails(service):
     await service.viking_fs.mkdir(dir_uri, ctx=ctx, exist_ok=True)
     await service.viking_fs.write(child_uri, "child data", ctx=ctx)
 
-    with pytest.raises(FailedPreconditionError):
+    with _raises_tool_error(FailedPreconditionError):
         await forget(uri=dir_uri)
 
 
@@ -1944,7 +1953,7 @@ async def test_forget_rejects_namespace_roots_for_non_root(
 
     token = _mcp_ctx.set(ctx)
     try:
-        with pytest.raises(PermissionDeniedError, match=re.escape(expected_message)):
+        with _raises_tool_error(PermissionDeniedError, match=re.escape(expected_message)):
             await forget(uri=uri, recursive=True)
     finally:
         _mcp_ctx.reset(token)
@@ -1978,7 +1987,7 @@ async def test_write_replace_overwrites_existing(service):
 async def test_write_create_fails_when_file_exists(service):
     uri = "viking://resources/test_write_create_exists.md"
     await write(uri=uri, content="v1")
-    with pytest.raises(AlreadyExistsError):
+    with _raises_tool_error(AlreadyExistsError):
         await write(uri=uri, content="v2", mode="create")
 
 
@@ -1991,21 +2000,21 @@ async def test_write_append_appends_to_existing(service):
 
 
 async def test_write_append_missing_file_fails(service):
-    with pytest.raises(NotFoundError):
+    with _raises_tool_error(NotFoundError):
         await write(
             uri="viking://resources/test_write_append_missing.md", content="x", mode="append"
         )
 
 
 async def test_write_create_rejects_disallowed_extension(service):
-    with pytest.raises(InvalidArgumentError):
+    with _raises_tool_error(InvalidArgumentError):
         await write(uri="viking://resources/test_write_ext.csv", content="a,b\n", mode="create")
 
 
 async def test_write_rejects_derived_semantic_file(service):
-    with pytest.raises(InvalidArgumentError):
+    with _raises_tool_error(InvalidArgumentError):
         await write(uri="viking://resources/test_write_derived/.abstract.md", content="x")
-    with pytest.raises(InvalidArgumentError):
+    with _raises_tool_error(InvalidArgumentError):
         await write(uri="viking://resources/test_write_derived/.relations.json", content="x")
 
 
@@ -2036,7 +2045,7 @@ async def test_edit_sequential_edits_compose(service):
 async def test_edit_requires_unique_match(service):
     uri = "viking://resources/test_edit_multi.md"
     await write(uri=uri, content="dup\ndup\n")
-    with pytest.raises(InvalidArgumentError, match="matches 2 locations"):
+    with _raises_tool_error(InvalidArgumentError, match="matches 2 locations"):
         await edit(uri=uri, old_string="dup", new_string="x")
 
 
@@ -2051,19 +2060,19 @@ async def test_edit_replace_all(service):
 async def test_edit_missing_old_string_fails(service):
     uri = "viking://resources/test_edit_missing.md"
     await write(uri=uri, content="alpha\n")
-    with pytest.raises(InvalidArgumentError, match="not found"):
+    with _raises_tool_error(InvalidArgumentError, match="not found"):
         await edit(uri=uri, old_string="zzz", new_string="x")
 
 
 async def test_edit_empty_old_string_fails(service):
     uri = "viking://resources/test_edit_empty.md"
     await write(uri=uri, content="alpha\n")
-    with pytest.raises(InvalidArgumentError, match="must not be empty"):
+    with _raises_tool_error(InvalidArgumentError, match="must not be empty"):
         await edit(uri=uri, old_string="", new_string="x")
 
 
 async def test_edit_on_missing_file_fails(service):
-    with pytest.raises(NotFoundError):
+    with _raises_tool_error(NotFoundError):
         await edit(uri="viking://resources/test_edit_ghost.md", old_string="a", new_string="b")
 
 
@@ -2161,9 +2170,9 @@ async def test_edit_user_root_file_via_canonical_uri(service):
 
 
 async def test_write_user_managed_subtree_rejected(service):
-    with pytest.raises(InvalidArgumentError, match="user root"):
+    with _raises_tool_error(InvalidArgumentError, match="user root"):
         await write(uri="viking://user/test_user/sessions/fake-session.md", content="x")
-    with pytest.raises(InvalidArgumentError, match="user root"):
+    with _raises_tool_error(InvalidArgumentError, match="user root"):
         await write(uri="viking://user/test_user/skills/demo/SKILL.md", content="x")
 
 
