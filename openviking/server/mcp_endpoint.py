@@ -35,6 +35,7 @@ from mcp.types import (
     ContentBlock,
     ImageContent,
     TextContent,
+    ToolAnnotations,
 )
 from pydantic import BaseModel, Field
 from starlette.requests import Request
@@ -265,6 +266,33 @@ def _translate_openviking_errors(
     return wrapper
 
 
+# Each static profile describes the tool's most consequential supported mode.
+_READ_ONLY_TOOL_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+_DESTRUCTIVE_TOOL_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=False,
+    openWorldHint=True,
+)
+
+
 # -- find / search ---------------------------------------------------------
 
 
@@ -277,7 +305,7 @@ def _resolve_context_type_filter(
         raise InvalidArgumentError(str(exc)) from exc
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 @_translate_openviking_errors
 async def find(
     query: str,
@@ -331,7 +359,7 @@ _MCP_CONTEXT_ONLY_ALIASES = {
 }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
 @_translate_openviking_errors
 async def search(
     query: str,
@@ -655,7 +683,7 @@ def _mcp_media_download_hint(uri: str) -> str:
     )
 
 
-@mcp.tool(structured_output=False)
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS, structured_output=False)
 @_translate_openviking_errors
 async def read(
     uris: str | list[str],
@@ -797,10 +825,10 @@ async def read(
 # -- list ------------------------------------------------------------------
 
 
-@mcp.tool(name="list")
+@mcp.tool(name="list", annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 @_translate_openviking_errors
 async def ls(
-    uri: str,
+    uri: str = "viking://",
     recursive: bool = False,
     offset: int = 0,
     limit: int | None = None,
@@ -810,7 +838,7 @@ async def ls(
     """List one sorted page under a viking:// directory URI.
 
     Args:
-        uri: Directory URI to list.
+        uri: Directory URI to list; defaults to "viking://" like tree and glob.
         recursive: Whether to recursively list descendants.
         offset: Number of visible entries to skip.
         limit: Optional maximum number of entries.
@@ -841,7 +869,8 @@ async def ls(
     if sort_by is not None:
         options["sort_by"] = sort_by
         options["sort_order"] = sort_order
-    entries = await service.fs.ls(resolved_uri, **options)
+    page = await service.fs.ls(resolved_uri, **options)
+    entries = page.entries
     if not entries:
         return f"(no entries under {uri})"
 
@@ -854,6 +883,8 @@ async def ls(
             lines.append(f"[{'dir' if is_dir else 'file'}] {entry_uri}")
         else:
             lines.append(f"[{'dir' if is_dir else 'file'}] {name}")
+    if page.has_more:
+        lines.append("(more entries available; use offset and limit to view the next page)")
     return "\n".join(lines)
 
 
@@ -876,7 +907,7 @@ def _tree_abstract(entry: Dict[str, Any]) -> str:
     return " ".join(abstract.split())
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 @_translate_openviking_errors
 async def tree(
     uri: str = "viking://",
@@ -911,7 +942,7 @@ async def tree(
     output = "agent" if include_abstract else "original"
     effective_limit = limit if limit is not None else node_limit
     try:
-        entries = await service.fs.tree(
+        page = await service.fs.tree(
             resolved_uri,
             ctx=ctx,
             output=output,
@@ -921,7 +952,8 @@ async def tree(
             offset=offset,
         )
     except NotFoundError:
-        entries = []
+        page = None
+    entries = page.entries if page is not None else []
     if not entries:
         return f"(nothing under {uri})"
 
@@ -940,7 +972,7 @@ async def tree(
         abstract = _tree_abstract(e)
         if include_abstract and abstract:
             lines.append(f"{indent}  - {abstract}")
-    if len(entries) >= effective_limit:
+    if page is not None and page.has_more:
         lines.append(
             f"(truncated at node_limit={effective_limit}; narrow the uri or raise node_limit to see more)"
         )
@@ -955,7 +987,7 @@ class StoreMessage(BaseModel):
     content: str = Field(description="Message text content")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
 @_translate_openviking_errors
 async def remember(messages: list[StoreMessage]) -> str:
     """Store information into OpenViking long-term memory. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting."""
@@ -981,7 +1013,7 @@ async def remember(messages: list[StoreMessage]) -> str:
 # -- write -----------------------------------------------------------------
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
 @_translate_openviking_errors
 async def write(
     uri: str,
@@ -1022,7 +1054,7 @@ async def write(
     return message + _indexing_hint(result)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
 @_translate_openviking_errors
 async def edit(
     uri: str,
@@ -1051,8 +1083,11 @@ async def edit(
         raise NotFoundError(uri, "file") from exc
     occurrences = current.count(old_string)
     if occurrences == 0:
+        hint = ""
+        if current.replace("\r\n", "\n").count(old_string.replace("\r\n", "\n")):
+            hint = " old_string matches only after normalizing CRLF/LF line endings."
         raise InvalidArgumentError(
-            f"old_string not found in {uri}. "
+            f"old_string not found in {uri}.{hint} "
             "Re-read the file with the read tool to get its current content."
         )
     if occurrences > 1 and not replace_all:
@@ -1179,7 +1214,7 @@ async def _maybe_sitemap_hint(path: str) -> str:
         return ""
 
 
-@mcp.tool()
+@mcp.tool(annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS)
 @_translate_openviking_errors
 async def add_resource(
     path: str = "",
@@ -1472,7 +1507,7 @@ def _format_skill_install_result(result: Dict[str, Any], *, list_only: bool) -> 
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS)
 @_translate_openviking_errors
 async def add_skill(
     data: str = "",
@@ -1638,7 +1673,7 @@ async def add_skill(
 # `resume`, `trigger`, `update --interval`, etc.) for those operations.
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 @_translate_openviking_errors
 async def list_watches() -> str:
     """List watch tasks (auto-refresh subscriptions) visible to the current user."""
@@ -1671,7 +1706,7 @@ async def list_watches() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS)
 @_translate_openviking_errors
 async def cancel_watch(to_uri: str) -> str:
     """Cancel a watch task by its target URI (e.g. "viking://resources/volcengine/OpenViking")."""
@@ -1715,7 +1750,7 @@ async def cancel_watch(to_uri: str) -> str:
 # -- grep ------------------------------------------------------------------
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 @_translate_openviking_errors
 async def grep(
     uri: str, pattern: str | list[str], case_insensitive: bool = False, node_limit: int = 10
@@ -1785,7 +1820,7 @@ async def grep(
 # -- glob ------------------------------------------------------------------
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 @_translate_openviking_errors
 async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> str:
     """Find viking:// files matching a glob pattern (e.g. **/*.md, *.py). Use this for filename matching; use the search tool for content-based retrieval."""
@@ -1812,7 +1847,7 @@ async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> s
 # -- forget ----------------------------------------------------------------
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS)
 @_translate_openviking_errors
 async def forget(uri: str, recursive: bool = False) -> str:
     """Permanently delete a viking:// URI from OpenViking. Irreversible — confirm with user before calling.
@@ -1829,7 +1864,7 @@ async def forget(uri: str, recursive: bool = False) -> str:
 # -- health ----------------------------------------------------------------
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 @_translate_openviking_errors
 async def health() -> str:
     """Check whether the OpenViking server is healthy."""
