@@ -302,6 +302,8 @@ jobs:
       - name: Run MCP compatibility regression tests
         # These three assertions fail unchanged on upstream/main@3e02c6ac2984 and
         # cover existing storage/auth behavior rather than the MCP SDK boundary.
+        env:
+          OPENVIKING_CONFIG_FILE: tests/api_test/ov.conf.template
         run: >-
           uv run pytest -q -o addopts=''
           tests/unit/test_vikingbot_mcp.py
