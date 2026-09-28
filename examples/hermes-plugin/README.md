@@ -2,39 +2,38 @@
 
 Context database by Volcengine (ByteDance) with filesystem-style knowledge hierarchy, tiered retrieval, and automatic memory extraction.
 
-This directory prepares the standalone OpenViking provider for migration out of
-Hermes core. The installation and upgrade steps below are for migration testing
-in a separate Hermes profile.
+This plugin connects Hermes to OpenViking for long-term memory and knowledge
+retrieval. The installation steps below use a reviewed OpenViking commit.
 
-For normal use while Hermes still bundles OpenViking, follow the
+For Hermes releases that still bundle OpenViking, follow the
 [Hermes integration guide](../../docs/en/agent-integrations/05-hermes.md) and run
 `hermes memory setup openviking`. No external plugin installation is needed.
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the source, license, migration contract,
 and test commands.
 
-## Install for migration testing
+## Install
 
-Use a Hermes version with repository-subdirectory plugin support.
+Hermes v2026.9.24 is the tested release baseline. CI also tests a reviewed Hermes
+main commit; see [DEVELOPMENT.md](DEVELOPMENT.md). Hermes v2026.9.14 has a known
+profile-configuration incompatibility with this plugin; upgrade Hermes before
+using the external provider on that release.
 
-**Compatibility check:** With Hermes commit `989798cd5e`, a pinned source install
-succeeds, but enabling fails because this plugin's `psutil<8` requirement conflicts
-with Hermes's Android dependency. Use the bundled provider until this conflict is
-resolved.
-
-For migration testing:
+For a direct installation, replace the placeholder with the reviewed OpenViking
+commit's full 40-character SHA:
 
 ```bash
-hermes plugins install 'https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin'
+hermes plugins install 'https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin' \
+  --ref '<full-40-character-commit-SHA>' --no-enable
 hermes plugins enable openviking
 hermes memory setup openviking
 hermes memory status
 ```
 
 The equivalent shorthand is `volcengine/OpenViking/examples/hermes-plugin`.
-Hermes installs this directory as `$HERMES_HOME/plugins/openviking/` and installs
-its `pyproject.toml` dependencies under Hermes's dependency constraints.
-Accept Hermes's dependency prompt during install or enable.
+Hermes installs this directory as `$HERMES_HOME/plugins/openviking/`.
+In this two-step flow, Hermes resolves its `pyproject.toml` dependencies under
+Hermes's dependency constraints when you enable the plugin.
 
 If Hermes still includes the bundled OpenViking provider, that copy takes
 precedence. The external copy becomes active after the bundled copy is removed.
@@ -43,7 +42,7 @@ data needs to move. Automatic installation after core removal also requires a
 published `openviking` entry in the Hermes catalog; this directory alone does
 not register one.
 
-## Upgrade a test installation
+## Upgrade
 
 For a direct subdirectory installation, use force-reinstallation instead of
 `hermes plugins update openviking`. Hermes does not retain the repository's
