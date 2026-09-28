@@ -15,7 +15,14 @@ and test commands.
 
 ## Install for migration testing
 
-Use a current Hermes version with repository-subdirectory plugin support:
+Use a Hermes version with repository-subdirectory plugin support.
+
+**Compatibility check:** With Hermes commit `989798cd5e`, a pinned source install
+succeeds, but enabling fails because this plugin's `psutil<8` requirement conflicts
+with Hermes's Android dependency. Use the bundled provider until this conflict is
+resolved.
+
+For migration testing:
 
 ```bash
 hermes plugins install 'https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin'
@@ -27,6 +34,7 @@ hermes memory status
 The equivalent shorthand is `volcengine/OpenViking/examples/hermes-plugin`.
 Hermes installs this directory as `$HERMES_HOME/plugins/openviking/` and installs
 its `pyproject.toml` dependencies under Hermes's dependency constraints.
+Accept Hermes's dependency prompt during install or enable.
 
 If Hermes still includes the bundled OpenViking provider, that copy takes
 precedence. The external copy becomes active after the bundled copy is removed.
@@ -135,7 +143,10 @@ OpenViking's server config is separate from Hermes:
   `account`, and `user`. It is read from `OPENVIKING_CLI_CONFIG_FILE` or
   `~/.openviking/ovcli.conf`.
 
-Hermes-side provider config is read from the initialized profile's `.env`.
+Hermes reads provider settings from the initialized profile's `config.yaml`,
+profile secrets, and linked `ovcli.conf`. Connection values resolve in this order:
+profile environment, linked OpenViking config, Hermes YAML, then defaults. API keys
+come from profile secrets or the linked OpenViking config, not Hermes YAML.
 After initialization, the provider keeps that profile for connection, identity,
 and recall settings, including when another profile is active in the same
 process. For the launch profile, process-level `OPENVIKING_*` values fill missing
@@ -151,8 +162,8 @@ Routed profiles never inherit the launch profile's process values.
 | `OPENVIKING_USER` | `default` | Tenant user for local/trusted mode |
 | `OPENVIKING_AGENT` | (none) | Optional peer ID for separate assistant context |
 
-When `OPENVIKING_API_KEY` is set, Hermes lets OpenViking derive account/user
-identity from the key. In local or trusted deployments without an API key,
+User and admin API keys let OpenViking derive account/user identity from the key.
+In local or trusted deployments without an API key,
 Hermes sends `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` as identity headers.
 Hermes also sends `User-Agent: openviking-memory-hermes/<version>` on
 OpenViking requests. This standard harness identifier contains the Hermes
@@ -386,9 +397,10 @@ exceed it, and the server may include other context during extraction.
 
 ### Non-primary contexts
 
-Hermes passes an `agent_context` to `initialize()`. Sessions started for scheduled
-cron jobs, delegated subagents, or flush forks (`cron`, `subagent`, `flush`) are
-non-primary: recall and profile reads keep working, but the provider skips turn
-uploads, session commits, and memory mirroring, so fixed-prompt job output neither
-lands in the memory bank nor spends server-side extraction budget. Interactive
-sessions (and hosts that predate `agent_context`) keep the previous write behavior.
+When Hermes initializes the provider with `agent_context` set to `cron`, `subagent`,
+or `flush`, recall and profile reads keep working. Automatic turn uploads,
+session-end/switch commits, and native memory mirroring are skipped for that
+context. Startup recovery can still commit pending messages from earlier sessions.
+Explicit `viking_*` tools keep their normal behavior, including writes and deletes.
+Interactive sessions (and hosts that predate `agent_context`) keep the previous
+automatic write behavior.
