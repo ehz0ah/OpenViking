@@ -130,7 +130,8 @@ class SessionCommitProcessor(DequeueHandlerBase):
         try:
             processed = await self._process(msg, ctx)
         except IdentityDeletingError as exc:
-            # Settle this delivery through the normal result/ACK path. A task
-            # already cancelling becomes cancelled; otherwise it records failure.
+            # A fenced cancellation-marker write can replace CancelledError.
+            # Settle through the result/ACK path; the tracker keeps a task
+            # already cancelling as cancelled, otherwise records failure.
             return ProcessResult.failed(str(exc))
         return ProcessResult.success() if processed else ProcessResult.requeued()

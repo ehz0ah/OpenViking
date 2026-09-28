@@ -526,18 +526,22 @@ async def test_session_commit_deletion_fence_settles_delivery(tracked_queue, pha
     queue, index, transport, finalize, cancelled = tracked_queue
     deleting = phase != "cancel_during_work"
     started = asyncio.Event()
+    reads = []
+    write_attempts = []
     ctx = RequestContext(user=UserIdentifier("account", "user"), role=Role.USER)
 
     class FencedFS:
         _deletion_guard = staticmethod(lambda account, user: deleting)
 
         async def stat(self, uri, **kwargs):
-            VikingFS._ensure_identity_not_deleting(self, kwargs["ctx"])
+            # Like VikingFS.stat, reads remain allowed during deletion.
+            reads.append(uri)
             return {}
 
         async def write_file(self, **kwargs):
+            write_attempts.append(kwargs["uri"])
             VikingFS._ensure_identity_not_deleting(self, kwargs["ctx"])
-            pytest.fail("deleting identity must not write a cancellation marker")
+            pytest.fail("deleting identity must reject the marker write")
 
     class CommitSession(Session):
         async def load(self):
@@ -545,6 +549,11 @@ async def test_session_commit_deletion_fence_settles_delivery(tracked_queue, pha
 
         async def resume_queued_commit(self, msg):
             started.set()
+            if phase == "queued":
+                await self._write_failed_marker(
+                    msg.archive_uri, stage="memory_extraction", error="commit write failed"
+                )
+                pytest.fail("deleting identity must reject the commit write")
             try:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
@@ -580,6 +589,8 @@ async def test_session_commit_deletion_fence_settles_delivery(tracked_queue, pha
             index.cancel_active("task-1")
         await asyncio.wait_for(worker, 1)
         assert not index.has_work("task-1")
+        assert reads == [msg.session_uri]
+        assert write_attempts == [f"{msg.archive_uri}/.failed.json"]
         finalize.assert_awaited_once()
         if phase != "cancel_before_start":
             assert index.failure("task-1") == "Identity deletion is in progress"
