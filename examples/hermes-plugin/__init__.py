@@ -511,13 +511,17 @@ _TOOL_STATUS_ERROR_ALIASES = {"error", "failed", "failure"}
 _TOOL_STATUS_COMPLETED_ALIASES = {"completed", "complete", "success", "succeeded"}
 
 
-def _resolve_user_space(client, *, timeout: Optional[float] = None) -> Optional[str]:
+def _resolve_user_space(client, *, timeout: Optional[float] = None,
+                        raise_on_timeout: bool = False) -> Optional[str]:
     """Server-asserted current user for explicit-uid URIs; ``None`` when the probe fails or
     reports no user. Callers may fall back to a configured value for that one operation but
-    must not cache an unverified identity — a later probe can succeed."""
+    must not cache an unverified identity — a later probe can succeed.
+    Query recall can propagate timeouts to its bounded warning handler."""
     try:
         status = client.get("/api/v1/system/status", **({"timeout": timeout} if timeout is not None else {}))
-    except Exception:
+    except Exception as exc:
+        if raise_on_timeout and _is_timeout_error(exc):
+            raise
         logger.debug("OpenViking user-space probe failed; using configured fallback", exc_info=True)
         return None
     return str(((status or {}).get("result") or {}).get("user") or "").strip() or None
@@ -1832,7 +1836,10 @@ class OpenVikingMemoryProvider(MemoryProvider):
             if scope == "peer":
                 # Explicit roots also constrain fallback searches when there is
                 # no sender. An actor-less user-root search includes all peers.
-                user = _resolve_user_space(client, timeout=self._remaining_recall_timeout(deadline, cfg["request_timeout_seconds"]))
+                user = _resolve_user_space(
+                    client, timeout=self._remaining_recall_timeout(deadline, cfg["request_timeout_seconds"]),
+                    raise_on_timeout=True,
+                )
                 if not user:
                     return ""
                 user_root = f"viking://user/{user}"
