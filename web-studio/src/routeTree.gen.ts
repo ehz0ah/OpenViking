@@ -21,6 +21,7 @@ import { Route as RequestLogsRouteRouteImport } from './routes/request-logs/rout
 import { Route as PlaygroundRouteRouteImport } from './routes/playground/route'
 import { Route as PermissionsRouteRouteImport } from './routes/permissions/route'
 import { Route as MonitoringRouteRouteImport } from './routes/monitoring/route'
+import { Route as ModelsRouteRouteImport } from './routes/models/route'
 import { Route as HomeRouteRouteImport } from './routes/home/route'
 import { Route as AgentExperienceRouteRouteImport } from './routes/agent-experience/route'
 import { Route as IndexRouteImport } from './routes/index'
@@ -95,6 +96,11 @@ const PermissionsRouteRoute = PermissionsRouteRouteImport.update({
 const MonitoringRouteRoute = MonitoringRouteRouteImport.update({
   id: '/monitoring',
   path: '/monitoring',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ModelsRouteRoute = ModelsRouteRouteImport.update({
+  id: '/models',
+  path: '/models',
   getParentRoute: () => rootRouteImport,
 } as any)
 const HomeRouteRoute = HomeRouteRouteImport.update({
@@ -178,6 +184,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/agent-experience': typeof AgentExperienceRouteRouteWithChildren
   '/home': typeof HomeRouteRoute
+  '/models': typeof ModelsRouteRoute
   '/monitoring': typeof MonitoringRouteRoute
   '/permissions': typeof PermissionsRouteRoute
   '/playground': typeof PlaygroundRouteRoute
@@ -206,6 +213,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/home': typeof HomeRouteRoute
+  '/models': typeof ModelsRouteRoute
   '/monitoring': typeof MonitoringRouteRoute
   '/permissions': typeof PermissionsRouteRoute
   '/playground': typeof PlaygroundRouteRoute
@@ -233,6 +241,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/agent-experience': typeof AgentExperienceRouteRouteWithChildren
   '/home': typeof HomeRouteRoute
+  '/models': typeof ModelsRouteRoute
   '/monitoring': typeof MonitoringRouteRoute
   '/permissions': typeof PermissionsRouteRoute
   '/playground': typeof PlaygroundRouteRoute
@@ -264,6 +273,7 @@ export interface FileRouteTypes {
     | '/'
     | '/agent-experience'
     | '/home'
+    | '/models'
     | '/monitoring'
     | '/permissions'
     | '/playground'
@@ -292,6 +302,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/home'
+    | '/models'
     | '/monitoring'
     | '/permissions'
     | '/playground'
@@ -318,6 +329,7 @@ export interface FileRouteTypes {
     | '/'
     | '/agent-experience'
     | '/home'
+    | '/models'
     | '/monitoring'
     | '/permissions'
     | '/playground'
@@ -348,6 +360,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AgentExperienceRouteRoute: typeof AgentExperienceRouteRouteWithChildren
   HomeRouteRoute: typeof HomeRouteRoute
+  ModelsRouteRoute: typeof ModelsRouteRoute
   MonitoringRouteRoute: typeof MonitoringRouteRoute
   PermissionsRouteRoute: typeof PermissionsRouteRoute
   PlaygroundRouteRoute: typeof PlaygroundRouteRoute
@@ -451,6 +464,13 @@ declare module '@tanstack/react-router' {
       path: '/monitoring'
       fullPath: '/monitoring'
       preLoaderRoute: typeof MonitoringRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/models': {
+      id: '/models'
+      path: '/models'
+      fullPath: '/models'
+      preLoaderRoute: typeof ModelsRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/home': {
@@ -618,6 +638,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AgentExperienceRouteRoute: AgentExperienceRouteRouteWithChildren,
   HomeRouteRoute: HomeRouteRoute,
+  ModelsRouteRoute: ModelsRouteRoute,
   MonitoringRouteRoute: MonitoringRouteRoute,
   PermissionsRouteRoute: PermissionsRouteRoute,
   PlaygroundRouteRoute: PlaygroundRouteRoute,
