@@ -92,17 +92,21 @@ not exist.
 
 For a new connection, choose **OpenViking Service**, **Custom**, or **Quick Local**.
 
-Quick Local installs OpenViking 0.4.22 or newer in a private runtime. It uses
+Quick Local installs a compatible OpenViking 0.4.x server (0.4.22 or newer) in a
+private runtime. It uses
 `bge-small-zh-v1.5-f16` for local embeddings and copies the configured Hermes LLM
 settings for memory extraction. The LLM must use a static API key and an
 OpenAI-compatible or Anthropic-compatible API. OAuth and cloud-native
 credentials cannot be copied; use Custom for those deployments.
 
 Quick Local stores its runtime, data, model cache, and private configuration in
-`$HERMES_HOME/openviking/`. It binds to localhost and starts in the background
-when Hermes first uses memory. The embedding model downloads once, about
+`$HERMES_HOME/openviking/`. Setup validates it, then leaves its localhost server
+running so the first Hermes turn can use memory. On later starts, Hermes starts
+the server in the background if it has stopped. The embedding model downloads once, about
 46 MiB. The LLM can still use a remote API. Server logs are in
 `$HERMES_HOME/logs/openviking-server.log`.
+The first installation needs network access and C/C++ build tools if a compatible
+local-embedding wheel is unavailable.
 
 Run setup again after changing the Hermes model or API key. If the server is
 already running, setup reports that it needs a restart. Stop that Quick Local
@@ -159,6 +163,8 @@ Hermes reads provider settings from the initialized profile's `config.yaml`,
 profile secrets, and linked `ovcli.conf`. Connection values resolve in this order:
 profile environment, linked OpenViking config, Hermes YAML, then defaults. API keys
 come from profile secrets or the linked OpenViking config, not Hermes YAML.
+Quick Local uses its own saved connection and ignores connection environment
+overrides. Recall and commit settings still accept their documented overrides.
 After initialization, the provider keeps that profile for connection, identity,
 and recall settings, including when another profile is active in the same
 process. For the launch profile, process-level `OPENVIKING_*` values fill missing
@@ -198,9 +204,10 @@ memory:
 
 Existing non-empty `OPENVIKING_AGENT`, YAML `agent`, and linked OpenViking
 `actor_peer_id` or legacy `agent_id` values retain their behavior. Resolution
-order remains environment, linked OpenViking config, then Hermes YAML. To use
-no peer, remove the peer value from each configured source and start a new
-Hermes session.
+order remains environment, linked OpenViking config, then Hermes YAML for Cloud
+and Custom connections. Quick Local uses the `hermes` peer. To use
+no peer on a Cloud or Custom connection, remove the peer value from each
+configured source and start a new Hermes session.
 
 Upgrades do not move or delete existing memories. Installations that relied
 on the old implicit `hermes` peer now use user memory for new writes. Without

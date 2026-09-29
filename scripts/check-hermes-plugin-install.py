@@ -94,6 +94,7 @@ def check(host, repository, root, timeout):
         for name in (
             "__init__.py",
             "_setup.py",
+            "quick_local.py",
             "native_memory_mirror.py",
             "plugin.yaml",
             "pyproject.toml",

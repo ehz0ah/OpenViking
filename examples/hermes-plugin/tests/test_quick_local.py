@@ -52,7 +52,7 @@ def test_build_server_config_uses_profile_scoped_storage_and_local_embedding(
         "server": {
             "host": "127.0.0.1",
             "port": 1941,
-            "auth_mode": "api_key",
+            "auth_mode": "trusted",
             "root_api_key": "local-test-key",
         },
         "storage": {"workspace": str(tmp_path / "openviking" / "data")},
@@ -509,6 +509,8 @@ def test_fresh_provision_validates_before_writing_active_config(tmp_path, monkey
             "api_base": "https://llm.example/v1",
         },
     )
+    ready = MagicMock()
+    monkeypatch.setattr(setup, "_start_managed_server", ready)
     monkeypatch.setattr(setup, "_ensure_openviking_installed", lambda _paths: True)
     monkeypatch.setattr(quick_local, "find_available_port", lambda **_kwargs: 1937)
     paths = quick_local.managed_paths(tmp_path)
@@ -530,6 +532,7 @@ def test_fresh_provision_validates_before_writing_active_config(tmp_path, monkey
 
     monkeypatch.setattr(quick_local, "_start_validation_server", start)
     monkeypatch.setattr(quick_local, "_wait_for_health", lambda *args, **kwargs: True)
+    monkeypatch.setattr(quick_local, "_validate_tenant_access", lambda *_args: None)
     stop = MagicMock(return_value=True)
     monkeypatch.setattr(quick_local, "_stop_process", stop)
 
@@ -541,6 +544,7 @@ def test_fresh_provision_validates_before_writing_active_config(tmp_path, monkey
     paths = result.paths
     assert result.endpoint == "http://127.0.0.1:1937"
     assert result.reused is False
+    ready.assert_called_once_with(paths, "http://127.0.0.1:1937")
     assert result.server_restart_required is False
     assert not paths.restart_required_marker.exists()
     final_config = json.loads(paths.server_config.read_text(encoding="utf-8"))
@@ -749,7 +753,7 @@ def _saved_local(home, *, port=1938):
 
 
 @pytest.mark.parametrize(
-    "mode,code,accepted", [("api_key", 200, True), ("api_key", 403, False), ("dev", 200, False)]
+    "mode,code,accepted", [("trusted", 200, True), ("trusted", 403, False), ("dev", 200, False)]
 )
 def test_reuse_authenticates_profile_key(tmp_path, monkeypatch, mode, code, accepted):
     paths, _cfg = _saved_local(tmp_path)
@@ -759,7 +763,9 @@ def test_reuse_authenticates_profile_key(tmp_path, monkeypatch, mode, code, acce
         requests.append(request)
         if request.url.path == "/health":
             assert "X-API-Key" not in request.headers
-            return httpx.Response(200, json={"status": "ok", "auth_mode": mode})
+            return httpx.Response(
+                200, json={"status": "ok", "auth_mode": mode, "root_api_key_required": True}
+            )
         assert request.url.path == "/api/v1/admin/accounts"
         assert request.headers["X-API-Key"] == "local-test-key"
         return httpx.Response(code, json={"status": "ok" if code == 200 else "error"})
@@ -961,3 +967,121 @@ def test_switch_to_custom_clears_managed_marker(tmp_path):
         for key in ("deployment", "server_config_path", "server_command_path")
     )
     assert provider_config["use_ovcli_config"] is False
+
+
+@pytest.mark.parametrize("status,accepted", [(200, True), (403, False)])
+def test_validation_checks_tenant_write_access(monkeypatch, status, accepted):
+    def post(url, **kwargs):
+        assert url == "http://127.0.0.1:1938/api/v1/sessions"
+        assert kwargs["headers"]["X-OpenViking-Account"] == "default"
+        assert kwargs["headers"]["X-OpenViking-User"] == "default"
+        assert kwargs["headers"]["X-API-Key"] == "local-test-key"
+        assert kwargs["json"] == {} and kwargs["trust_env"] is False
+        return httpx.Response(
+            status,
+            json={"status": "ok" if accepted else "error"},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx, "post", post)
+    if accepted:
+        quick_local._validate_tenant_access("http://127.0.0.1:1938", "local-test-key")
+    else:
+        with pytest.raises(quick_local.QuickLocalSetupError, match="memory data access"):
+            quick_local._validate_tenant_access("http://127.0.0.1:1938", "local-test-key")
+
+
+def test_failed_data_validation_does_not_activate_configuration(tmp_path, monkeypatch):
+    engine = quick_local.QuickLocalSetup(health_check=lambda _url: (True, ""))
+    monkeypatch.setattr(
+        quick_local,
+        "resolve_hermes_vlm_config",
+        lambda: {
+            "provider": "openai",
+            "model": "test",
+            "api_key": "key",
+            "api_base": "https://llm.example/v1",
+        },
+    )
+    monkeypatch.setattr(engine, "_ensure_openviking_installed", lambda _paths: False)
+    monkeypatch.setattr(quick_local, "find_available_port", lambda **_kwargs: 1938)
+    process = MagicMock()
+    monkeypatch.setattr(quick_local, "_start_validation_server", lambda *_args: process)
+    monkeypatch.setattr(quick_local, "_wait_for_health", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        quick_local,
+        "_validate_tenant_access",
+        MagicMock(side_effect=quick_local.QuickLocalSetupError("memory data access denied")),
+    )
+    stop = MagicMock(return_value=True)
+    monkeypatch.setattr(quick_local, "_stop_process", stop)
+    with pytest.raises(quick_local.QuickLocalSetupError, match="memory data access"):
+        engine.provision(hermes_home=tmp_path)
+    paths = quick_local.managed_paths(tmp_path)
+    assert not paths.server_config.exists() and not paths.ovcli_config.exists()
+    stop.assert_called_once_with(process)
+
+
+@pytest.mark.parametrize("healthy", [True, False])
+def test_managed_start_keeps_only_a_ready_process(tmp_path, monkeypatch, healthy):
+    paths, _cfg = _saved_local(tmp_path)
+    process = MagicMock()
+    monkeypatch.setattr(quick_local, "_start_validation_server", lambda *_args: process)
+    monkeypatch.setattr(quick_local, "_wait_for_health", lambda *_args, **_kwargs: healthy)
+    stop = MagicMock(return_value=True)
+    monkeypatch.setattr(quick_local, "_stop_process", stop)
+    engine = quick_local.QuickLocalSetup(health_check=lambda _url: (True, ""))
+    if healthy:
+        engine._start_managed_server(paths, "http://127.0.0.1:1938")
+        stop.assert_not_called()
+    else:
+        with pytest.raises(quick_local.QuickLocalSetupError, match="did not become ready"):
+            engine._start_managed_server(paths, "http://127.0.0.1:1938")
+        stop.assert_called_once_with(process)
+
+
+def test_managed_initialize_preserves_cli_startup_callbacks(tmp_path, monkeypatch):
+    provider = OpenVikingMemoryProvider()
+    monkeypatch.setattr(
+        provider, "_profile_config_and_env", lambda: ({"deployment": quick_local.DEPLOYMENT}, {})
+    )
+    monkeypatch.setattr(
+        provider,
+        "_resolve_bound_connection_settings",
+        lambda *_args: {
+            "endpoint": "http://127.0.0.1:1938",
+            "api_key": "key",
+            "account": "default",
+            "user": "default",
+            "agent": "hermes",
+        },
+    )
+    ensure = MagicMock(return_value=None)
+    monkeypatch.setattr(provider, "_ensure_client_locked", ensure)
+    status, warning = MagicMock(), MagicMock()
+    try:
+        provider.initialize(
+            "sid",
+            hermes_home=str(tmp_path),
+            platform="cli",
+            status_callback=status,
+            warning_callback=warning,
+        )
+        ensure.assert_called_once_with(status_callback=status, warning_callback=warning)
+    finally:
+        provider.shutdown()
+
+
+def test_managed_start_timeout_reports_its_actual_budget(tmp_path, monkeypatch):
+    provider = OpenVikingMemoryProvider()
+    provider._hermes_home = str(tmp_path)
+    provider._endpoint = "http://127.0.0.1:1938"
+    monkeypatch.setattr(
+        provider, "_profile_config_and_env", lambda: ({"deployment": quick_local.DEPLOYMENT}, {})
+    )
+    wait = MagicMock(return_value=False)
+    monkeypatch.setattr(openviking_module, "_wait_for_openviking_health", wait)
+    warning = MagicMock()
+    provider._finish_runtime_openviking_start(warning_callback=warning)
+    assert wait.call_args.kwargs["timeout_seconds"] == quick_local._HEALTH_TIMEOUT_SECONDS
+    assert f"{quick_local._HEALTH_TIMEOUT_SECONDS:.0f} seconds" in warning.call_args.args[0]

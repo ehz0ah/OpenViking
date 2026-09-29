@@ -142,20 +142,6 @@ def managed_paths(hermes_home: Path) -> QuickLocalPaths:
     )
 
 
-def managed_server_config_path(provider_config: Mapping[str, Any]) -> Optional[Path]:
-    if provider_config.get("deployment") != DEPLOYMENT:
-        return None
-    value = _clean_value(provider_config.get("server_config_path"))
-    return Path(value).expanduser() if value else None
-
-
-def managed_server_command_path(provider_config: Mapping[str, Any]) -> Optional[Path]:
-    if provider_config.get("deployment") != DEPLOYMENT:
-        return None
-    value = _clean_value(provider_config.get("server_command_path"))
-    return Path(value).expanduser() if value else None
-
-
 def clear_managed_settings(provider_config: dict[str, Any]) -> None:
     provider_config.pop("deployment", None)
     provider_config.pop("server_config_path", None)
@@ -191,7 +177,7 @@ def build_server_config(
         "server": {
             "host": "127.0.0.1",
             "port": port,
-            "auth_mode": "api_key",
+            "auth_mode": "trusted",
             "root_api_key": _server_key(paths),
         },
         "storage": {"workspace": str(paths.workspace)},
@@ -404,6 +390,7 @@ class QuickLocalSetup:
         preflight.paths.workspace.mkdir(parents=True, exist_ok=True)
         atomic_json_write(preflight.paths.server_config, server_config, mode=0o600)
         _write_ovcli_profile(preflight.paths.ovcli_config, endpoint, server_config)
+        self._start_managed_server(preflight.paths, endpoint)
         self._emit(
             QuickLocalStage.WRITE_CONFIG,
             f"Saved Quick Local configuration to {preflight.paths.server_config}.",
@@ -544,6 +531,7 @@ class QuickLocalSetup:
                         "preparation timeout. Review the server log at "
                         f"{_server_log_path(paths.root.parent)} and retry."
                     )
+                _validate_tenant_access(endpoint, server_config["server"]["root_api_key"])
             except BaseException as exc:
                 primary_error = exc
                 raise
@@ -553,6 +541,27 @@ class QuickLocalSetup:
                     if primary_error is None:
                         raise QuickLocalSetupError(message)
                     primary_error.add_note(message)
+
+    def _start_managed_server(self, paths: QuickLocalPaths, endpoint: str) -> None:
+        """Leave a validated service ready for the first turn and reserve its port."""
+        self._emit(QuickLocalStage.VALIDATE, "Starting this profile's OpenViking server...")
+        process = _start_validation_server(
+            endpoint, paths.server_config, paths.root.parent, paths.server_command
+        )
+
+        def owned_health(url):
+            healthy, message = self._health_check(url)
+            return healthy and server_belongs_to_profile(paths, url), message
+
+        try:
+            if not _wait_for_health(endpoint, owned_health, process=process):
+                raise QuickLocalSetupError(
+                    "Quick Local server did not become ready. Review the server log and retry."
+                )
+        except BaseException as exc:
+            if not _stop_process(process):
+                exc.add_note("The newly started Quick Local server could not be stopped.")
+            raise
 
     def _emit(self, stage: QuickLocalStage, message: str) -> None:
         self._progress(QuickLocalProgress(stage=stage, message=message))
@@ -671,12 +680,40 @@ def _server_accepts_config(config: Mapping[str, Any], endpoint: str) -> bool:
             return False
         with httpx.Client(timeout=3.0, trust_env=False) as client:
             health = client.get(f"{endpoint}/health").json()
-            if health.get("auth_mode") != "api_key":
+            if (
+                health.get("auth_mode") != "trusted"
+                or health.get("root_api_key_required") is not True
+            ):
                 return False
             response = client.get(f"{endpoint}/api/v1/admin/accounts", headers={"X-API-Key": key})
             return response.status_code == 200 and response.json().get("status") == "ok"
     except (ValueError, AttributeError, httpx.HTTPError):
         return False
+
+
+def _validate_tenant_access(endpoint: str, key: str) -> None:
+    """Exercise a data write only in the disposable validation workspace."""
+    import httpx
+
+    try:
+        response = httpx.post(
+            f"{endpoint}/api/v1/sessions",
+            json={},
+            headers={
+                "X-API-Key": key,
+                "X-OpenViking-Account": "default",
+                "X-OpenViking-User": "default",
+            },
+            timeout=5.0,
+            trust_env=False,
+        )
+        response.raise_for_status()
+        if response.json().get("status") != "ok":
+            raise ValueError("session creation failed")
+    except (ValueError, httpx.HTTPError) as exc:
+        raise QuickLocalSetupError(
+            "Quick Local could not validate memory data access. Review the server log and retry."
+        ) from exc
 
 
 def _write_ovcli_profile(path: Path, endpoint: str, server_config: Mapping[str, Any]) -> None:
@@ -784,9 +821,7 @@ def _start_validation_server(
                     stdin=subprocess.DEVNULL,
                 )
     except Exception as exc:
-        raise QuickLocalSetupError(
-            f"Could not start the OpenViking validation server: {exc}"
-        ) from exc
+        raise QuickLocalSetupError(f"Could not start the OpenViking server: {exc}") from exc
 
 
 def _wait_for_health(

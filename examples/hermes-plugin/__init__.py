@@ -1169,10 +1169,10 @@ def _emit_runtime(message: str, callback=None, *, kind: str = "warning") -> None
             logger.debug("OpenViking runtime %s callback failed", kind, exc_info=True)
 
 
-def _runtime_openviking_timeout_message(endpoint: str) -> str:
+def _runtime_openviking_timeout_message(endpoint: str, timeout_seconds: float = _LOCAL_OPENVIKING_AUTOSTART_TIMEOUT) -> str:
     return (
         f"Local OpenViking server at {endpoint} is not reachable. Tried to start openviking-server, but it did not "
-        f"become reachable within {_LOCAL_OPENVIKING_AUTOSTART_TIMEOUT:.0f} seconds. {_RETRY_LATER}"
+        f"become reachable within {timeout_seconds:.0f} seconds. {_RETRY_LATER}"
     )
 
 
@@ -1562,7 +1562,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         timeout = quick_local._HEALTH_TIMEOUT_SECONDS if managed else _LOCAL_OPENVIKING_AUTOSTART_TIMEOUT
         if not _wait_for_openviking_health(endpoint, timeout_seconds=timeout, should_stop=stale):
             if not stale():
-                _emit_runtime(_runtime_openviking_timeout_message(endpoint), warning_callback)
+                _emit_runtime(_runtime_openviking_timeout_message(endpoint, timeout), warning_callback)
             return
 
         with self._client_refresh_lock:
@@ -1673,7 +1673,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
             self._failed_refresh = (("invalid-endpoint", connection_error), time.monotonic())
             _emit_runtime(f"{connection_error} {_FIX_ENDPOINT}", warning_callback)
         elif config.get("deployment") == quick_local.DEPLOYMENT:
-            self._client = self._ensure_client_locked()
+            self._client = self._ensure_client_locked(status_callback=status_callback, warning_callback=warning_callback)
         else:
             try:
                 self._client = self._build_client()
@@ -1723,7 +1723,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         failed = self._failed_refresh
         return failed is not None and failed[0] == failed_key and time.monotonic() - failed[1] < _FAILED_CONFIG_RETRY_COOLDOWN_SECONDS
 
-    def _ensure_client_locked(self) -> Optional["_VikingClient"]:
+    def _ensure_client_locked(self, *, status_callback=None, warning_callback=None) -> Optional["_VikingClient"]:
         """Resolve and publish one client/config state under the refresh lock."""
         if self._shutting_down:
             self._client = None
@@ -1786,7 +1786,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 health_message,
             )
         else:
-            self._handle_runtime_openviking_unreachable()
+            self._handle_runtime_openviking_unreachable(status_callback=status_callback, warning_callback=warning_callback)
         self._client = None
         return None
 
