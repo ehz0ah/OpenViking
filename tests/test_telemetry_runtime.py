@@ -226,6 +226,24 @@ async def test_embedding_span_failures_do_not_break_provider_calls(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    [
+        "/Users/private/models/model.gguf",
+        "provider//home/private/model.gguf",
+        r"C:\private\model.gguf",
+    ],
+)
+async def test_embedding_spans_omit_local_model_paths(embedding_span_exporter, model):
+    embedder = _TracingEmbedder(model)
+    await embed_compat(embedder, "private input")
+    assert embedder.model_name == model
+    span = _embedding_spans(embedding_span_exporter)[0]
+    assert span.name == "embeddings local-model"
+    assert "private" not in span.to_json()
+
+
+@pytest.mark.asyncio
 async def test_concurrent_embedding_spans_keep_token_usage_isolated(embedding_span_exporter):
     embedder = _ConcurrentTracingEmbedder()
 
@@ -262,7 +280,7 @@ async def test_query_embedding_cache_hit_does_not_create_provider_span(
 ):
     embedder = _TracingEmbedder("cache-model")
 
-    with query_embed_cache_scope():
+    async with query_embed_cache_scope():
         await embed_compat(embedder, "cached", is_query=True)
         await embed_compat(embedder, "cached", is_query=True)
 
@@ -270,6 +288,50 @@ async def test_query_embedding_cache_hit_does_not_create_provider_span(
     assert [span.name for span in _embedding_spans(embedding_span_exporter)] == [
         "embeddings cache-model"
     ]
+
+
+@pytest.mark.asyncio
+async def test_account_bound_embedding_spans_include_usage_and_skip_cache_hits(
+    embedding_span_exporter,
+    monkeypatch,
+):
+    from openviking.config.embedding import AccountEmbeddingProvider
+    from openviking.config.vector import VectorRuntimeSettings
+    from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+    from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
+
+    embedder = _TracingEmbedder("account-model")
+    monkeypatch.setattr(EmbeddingConfig, "get_embedder", lambda _config: embedder)
+    settings = VectorRuntimeSettings(
+        embedding=EmbeddingConfig(
+            dense={
+                "provider": "openai",
+                "model": "account-model",
+                "dimension": 3,
+                "api_key": "test-key",
+            },
+        ),
+        vectordb=VectorDBBackendConfig(dimension=3),
+        embedding_profile="test",
+        dedicated_vectordb=False,
+    )
+    provider = AccountEmbeddingProvider(
+        SimpleNamespace(resolve=AsyncMock(return_value=settings)),
+        SimpleNamespace(add_update_consumer=lambda **_kwargs: None),
+    )
+    try:
+        bound = provider.bind("account-a")
+        async with query_embed_cache_scope():
+            first = await embed_compat(bound, "query", is_query=True)
+            second = await embed_compat(bound, "query", is_query=True)
+        assert first == second
+        assert embedder.attempts == 1
+        spans = _embedding_spans(embedding_span_exporter)
+        assert len(spans) == 1
+        assert spans[0].attributes["gen_ai.usage.input_tokens"] == 7
+        assert (await provider.get_status("account-a")).borrowers == 0
+    finally:
+        await provider.close()
 
 
 @pytest.mark.asyncio
@@ -1121,7 +1183,8 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
 
     provider = SimpleNamespace(bind=Mock(return_value=_TelemetryAwareEmbedder()))
     handler = TextEmbeddingHandler(
-        _DummyVikingDB(), embedding_provider=provider,
+        _DummyVikingDB(),
+        embedding_provider=provider,
     )
     payload = {
         "data": json.dumps(

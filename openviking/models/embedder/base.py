@@ -7,10 +7,21 @@ import random
 import time
 import weakref
 from abc import ABC, abstractmethod
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, TypeVar, Union
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    TypeVar,
+    Union,
+)
 
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.embedding_input import (
@@ -77,9 +88,9 @@ class QueryEmbeddingCache(dict[Any, _SharedQueryEmbedding]):
             self.pop(key, None)
 
     async def close(self) -> None:
-        pending = {
-            entry.task for entry in self.values() if not entry.task.done()
-        } | {task for task in self._pending_tasks if not task.done()}
+        pending = {entry.task for entry in self.values() if not entry.task.done()} | {
+            task for task in self._pending_tasks if not task.done()
+        }
         for task in pending:
             task.cancel()
         if pending:
@@ -406,11 +417,12 @@ class EmbedderBase(ABC):
             from opentelemetry.trace import SpanKind, Status, StatusCode
 
             from openviking.telemetry import tracer_module
+            from openviking.telemetry.model_identity import model_name_for_trace
 
             if tracer_module.is_enabled():
                 otel_tracer = tracer_module.get_tracer()
                 span_context = otel_tracer.start_as_current_span(
-                    f"embeddings {self.model_name}",
+                    f"embeddings {model_name_for_trace(self.model_name)}",
                     kind=SpanKind.CLIENT,
                 )
                 span = span_context.__enter__()
@@ -427,7 +439,9 @@ class EmbedderBase(ABC):
                     if self.provider and self.provider != "unknown":
                         span.set_attribute("gen_ai.provider.name", str(self.provider))
                     if self.model_name:
-                        span.set_attribute("gen_ai.request.model", str(self.model_name))
+                        span.set_attribute(
+                            "gen_ai.request.model", model_name_for_trace(self.model_name)
+                        )
                     dimension_getter = getattr(self, "get_dimension", None)
                     if callable(dimension_getter):
                         dimension = dimension_getter()
