@@ -230,6 +230,10 @@ when available, duration, and normalized error type. Retries share one logical
 call span; cache hits create none. Composite and failover embedders trace the actual
 provider subcalls. These spans add no input text, vectors, API keys, or raw error
 bodies. Path-shaped model names are shown as `local-model` without changing requests.
+Async span duration includes concurrency waits and retry backoff.
+`openviking.embedding.queue_wait_ms` sums semaphore waits across all attempts;
+`openviking.embedding.provider_duration_ms` sums provider execution time, excluding
+queue waits and retry backoff.
 
 ## Generate a local trace and submit it for troubleshooting
 

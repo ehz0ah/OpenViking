@@ -421,6 +421,7 @@ class EmbedderBase(ABC):
 
             if tracer_module.is_enabled():
                 otel_tracer = tracer_module.get_tracer()
+                # Make the span current so nested instrumentation belongs to this embedding call.
                 span_context = otel_tracer.start_as_current_span(
                     f"embeddings {model_name_for_trace(self.model_name)}",
                     kind=SpanKind.CLIENT,
@@ -495,13 +496,20 @@ class EmbedderBase(ABC):
         logger=None,
         operation_name: str,
     ) -> T:
+        queue_wait_seconds = 0.0
+        provider_duration_seconds = 0.0
+
         async def _wrapped() -> T:
+            nonlocal queue_wait_seconds, provider_duration_seconds
             semaphore = getattr(self, "_account_semaphore", None)
             if semaphore is None:
                 semaphore = _get_async_embed_semaphore(self.max_concurrent)
             wait_started = time.monotonic()
-            await semaphore.acquire()
-            wait_elapsed = time.monotonic() - wait_started
+            try:
+                await semaphore.acquire()
+            finally:
+                wait_elapsed = time.monotonic() - wait_started
+                queue_wait_seconds += wait_elapsed
             telemetry = get_current_telemetry()
             telemetry.set("embedding.async.max_concurrent", self.max_concurrent)
             telemetry.set("embedding.async.wait_ms", round(wait_elapsed * 1000, 3))
@@ -513,6 +521,7 @@ class EmbedderBase(ABC):
                 return await func()
             finally:
                 elapsed = time.monotonic() - started
+                provider_duration_seconds += elapsed
                 telemetry.set("embedding.async.duration_ms", round(elapsed * 1000, 3))
                 if logger and elapsed >= 3.0:
                     logger.warning(
@@ -526,13 +535,29 @@ class EmbedderBase(ABC):
                 self._active_call_started_at = previous_started_at
                 semaphore.release()
 
-        with self._embedding_span():
-            return await retry_async(
-                _wrapped,
-                max_retries=self.max_retries,
-                logger=logger,
-                operation_name=operation_name,
-            )
+        with self._embedding_span() as span:
+            try:
+                return await retry_async(
+                    _wrapped,
+                    max_retries=self.max_retries,
+                    logger=logger,
+                    operation_name=operation_name,
+                )
+            finally:
+                if span is not None:
+                    try:
+                        span.set_attribute(
+                            "openviking.embedding.queue_wait_ms",
+                            round(queue_wait_seconds * 1000, 3),
+                        )
+                        span.set_attribute(
+                            "openviking.embedding.provider_duration_ms",
+                            round(provider_duration_seconds * 1000, 3),
+                        )
+                    except Exception:
+                        logging.getLogger(__name__).debug(
+                            "failed to set embedding span timing", exc_info=True
+                        )
 
     @property
     def is_dense(self) -> bool:

@@ -229,6 +229,10 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 耗时和归一化错误类型。一次逻辑调用的重试共用一个 span；缓存命中不产生 span。
 组合和故障切换 embedder 只记录实际服务调用。这些 span 不添加输入文本、向量、
 API key 或原始错误响应。路径形式的模型名称显示为 `local-model`，实际请求保持不变。
+异步 span 的耗时包含并发队列等待和重试退避。
+`openviking.embedding.queue_wait_ms` 累加所有尝试的信号量等待时间；
+`openviking.embedding.provider_duration_ms` 累加服务调用的执行时间，不包含
+队列等待和重试退避。
 
 ## 产生本地 Trace 并提交排查
 

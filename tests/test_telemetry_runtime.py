@@ -190,7 +190,10 @@ async def test_embedding_spans_capture_safe_success_and_failure_attributes(
     ]
     assert all(span.kind is otel_trace.SpanKind.CLIENT for span in spans)
     assert all(span.parent is not None for span in spans)
-    assert spans[0].attributes == {
+    attributes = dict(spans[0].attributes)
+    assert attributes.pop("openviking.embedding.queue_wait_ms") >= 0
+    assert attributes.pop("openviking.embedding.provider_duration_ms") >= 0
+    assert attributes == {
         "gen_ai.operation.name": "embeddings",
         "gen_ai.provider.name": "openai",
         "gen_ai.request.model": "success-model",
@@ -259,12 +262,55 @@ async def test_concurrent_embedding_spans_keep_token_usage_isolated(embedding_sp
 
 
 @pytest.mark.asyncio
+async def test_embedding_spans_separate_concurrency_wait_from_provider_duration(
+    embedding_span_exporter,
+):
+    started = asyncio.Event()
+
+    class QueuedEmbedder(_TracingEmbedder):
+        async def embed_async(self, content, is_query=False):
+            async def call():
+                started.set()
+                await asyncio.sleep(0.2)
+                return EmbedResult(dense_vector=[0.1, 0.2, 0.3])
+
+            return await self._run_with_async_retry(call, operation_name="queued embedding")
+
+    embedder = QueuedEmbedder("queued-model")
+    embedder.max_concurrent = 1
+    first = asyncio.create_task(embed_compat(embedder, "first"))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    await asyncio.gather(first, embed_compat(embedder, "second"))
+
+    spans = _embedding_spans(embedding_span_exporter)
+    assert len(spans) == 2
+    first_wait, second_wait = [s.attributes["openviking.embedding.queue_wait_ms"] for s in spans]
+    durations = [s.attributes["openviking.embedding.provider_duration_ms"] for s in spans]
+    assert first_wait < 50
+    assert second_wait == pytest.approx(200, abs=100)
+    assert second_wait == pytest.approx(durations[0], abs=75)
+    assert all(duration == pytest.approx(200, abs=100) for duration in durations)
+    assert (spans[1].end_time - spans[1].start_time) / 1_000_000 >= second_wait + durations[1] - 1
+
+
+@pytest.mark.asyncio
 async def test_embedding_retry_stays_inside_one_span(embedding_span_exporter, monkeypatch):
+    from openviking.models.embedder import base as embedder_base
+
     async def _no_delay(_delay):
         return None
 
+    clock = 0.0
+    waits = iter([0.125, 0.25])
+
+    async def acquire():
+        nonlocal clock
+        clock += next(waits)
+
+    monkeypatch.setattr(embedder_base, "time", SimpleNamespace(monotonic=lambda: clock))
     monkeypatch.setattr("openviking.utils.model_retry.asyncio.sleep", _no_delay)
     embedder = _TracingEmbedder("retry-model", failures=1, max_retries=1)
+    embedder._account_semaphore = SimpleNamespace(acquire=acquire, release=lambda: None)
 
     await embed_compat(embedder, "retry me", is_query=True)
 
@@ -272,6 +318,37 @@ async def test_embedding_retry_stays_inside_one_span(embedding_span_exporter, mo
     assert [span.name for span in _embedding_spans(embedding_span_exporter)] == [
         "embeddings retry-model"
     ]
+    assert (
+        _embedding_spans(embedding_span_exporter)[0].attributes[
+            "openviking.embedding.queue_wait_ms"
+        ]
+        == 375.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_embedding_queue_wait_closes_span(embedding_span_exporter):
+    queued = asyncio.Event()
+    semaphore = asyncio.Semaphore(0)
+
+    async def acquire():
+        queued.set()
+        await semaphore.acquire()
+
+    embedder = _TracingEmbedder("cancelled-model")
+    embedder._account_semaphore = SimpleNamespace(acquire=acquire, release=semaphore.release)
+    task = asyncio.create_task(embed_compat(embedder, "cancel me"))
+    await asyncio.wait_for(queued.wait(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    span = _embedding_spans(embedding_span_exporter)[0]
+    assert span.attributes["openviking.embedding.queue_wait_ms"] >= 0
+    assert span.attributes["openviking.embedding.provider_duration_ms"] == 0
+    assert embedder.attempts == 0
+    semaphore.release()
+    await embed_compat(embedder, "next request")
+    assert len(_embedding_spans(embedding_span_exporter)) == 2
 
 
 @pytest.mark.asyncio
