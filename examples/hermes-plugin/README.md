@@ -15,9 +15,7 @@ and test commands.
 ## Install
 
 Hermes v2026.9.24 is the tested release baseline. CI also tests a reviewed Hermes
-main commit; see [DEVELOPMENT.md](DEVELOPMENT.md). Hermes v2026.9.14 has a known
-profile-configuration incompatibility with this plugin; upgrade Hermes before
-using the external provider on that release.
+main commit; see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 For a direct installation, replace the placeholder with the reviewed OpenViking
 commit's full 40-character SHA:
