@@ -1,5 +1,6 @@
 """Preserve .env line endings through the external provider's setup writer."""
 
+import os
 import stat
 
 import pytest
@@ -48,7 +49,8 @@ def test_env_updates_preserve_bytes_and_safe_credentials(external_provider, eol)
     assert env.read_bytes() == eol.join(
         [b"OPENAI_API_KEY=new", b"NAME=caf\xe9", b"ADDED=safevalue"]
     ) + eol
-    assert stat.S_IMODE(env.stat().st_mode) == 0o600
+    if os.name == "posix":
+        assert stat.S_IMODE(env.stat().st_mode) == 0o600
 
 
 def test_new_env_file_uses_lf_and_can_be_emptied(external_provider):
@@ -57,6 +59,7 @@ def test_new_env_file_uses_lf_and_can_be_emptied(external_provider):
 
     module._write_env_vars(env, {"OPENAI_API_KEY": "new"})
     assert env.read_bytes() == b"OPENAI_API_KEY=new\n"
-    assert stat.S_IMODE(env.stat().st_mode) == 0o600
+    if os.name == "posix":
+        assert stat.S_IMODE(env.stat().st_mode) == 0o600
     module._write_env_vars(env, {}, remove_keys=("OPENAI_API_KEY",))
     assert env.read_bytes() == b""
