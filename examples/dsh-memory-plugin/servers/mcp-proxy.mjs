@@ -5,7 +5,7 @@
  *
  * DSH's MCP bridge starts this process as a local stdio MCP server. The proxy
  * resolves its connection and diagnostics through the same `resolveConfig()`
- * as the in-process runtime, from the child environment built in `mcp.mjs`: DSH
+ * as the in-process runtime, from the child environment built in `mcp-env.mjs`: DSH
  * scrubs credential-shaped names out of what it inherits, and values that came
  * from the Cordis patch are invisible to a subprocess otherwise.
  */
