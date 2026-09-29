@@ -22,7 +22,7 @@ from openviking.utils.model_retry import retry_async, retry_sync
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
-from ..base import ToolCall, VLMBase, VLMResponse
+from ..base import ToolCall, VLMBase, VLMResponse, trace_vlm_call
 
 logger = get_logger(__name__)
 
@@ -454,6 +454,7 @@ class LiteLLMVLMProvider(VLMBase):
             kwargs_messages = [{"role": "user", "content": content}]
         return self._build_kwargs(model, kwargs_messages, tools, tool_choice, thinking=thinking)
 
+    @trace_vlm_call
     def get_completion(
         self,
         prompt: str = "",
@@ -482,6 +483,7 @@ class LiteLLMVLMProvider(VLMBase):
             operation_name="LiteLLM VLM completion",
         )
 
+    @trace_vlm_call
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -518,6 +520,7 @@ class LiteLLMVLMProvider(VLMBase):
             operation_name="LiteLLM VLM async completion",
         )
 
+    @trace_vlm_call
     def get_vision_completion(
         self,
         prompt: str = "",
@@ -546,6 +549,7 @@ class LiteLLMVLMProvider(VLMBase):
             operation_name="LiteLLM VLM vision completion",
         )
 
+    @trace_vlm_call
     async def get_vision_completion_async(
         self,
         prompt: str = "",
