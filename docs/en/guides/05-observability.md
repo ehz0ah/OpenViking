@@ -198,6 +198,9 @@ share one logical call span; failover records each provider actually called.
 These new spans add no prompts, completions, media, API keys, or raw error bodies.
 Existing diagnostic events stay on their current operation span. Path-shaped model
 names are shown as `local-model` without changing requests. No new configuration is required.
+Trace labels use the backend's request model, including known defaults; an unknown
+default is labeled `unknown`. With no configured model, Codex text and vision requests
+now use its adapter's `gpt-5.3-codex` default instead of the inherited OpenAI default.
 
 ## Request-level telemetry
 

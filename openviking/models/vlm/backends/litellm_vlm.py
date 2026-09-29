@@ -418,6 +418,9 @@ class LiteLLMVLMProvider(VLMBase):
             )
         return message.content or ""
 
+    def _get_request_model(self) -> str:
+        return self.model or "gpt-4o-mini"
+
     def _build_text_kwargs(
         self,
         prompt: str = "",
@@ -427,7 +430,7 @@ class LiteLLMVLMProvider(VLMBase):
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
     ) -> dict[str, Any]:
-        model = self._resolve_model(self.model or "gpt-4o-mini")
+        model = self._resolve_model(self._get_request_model())
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
         return self._build_kwargs(
             model, kwargs_messages, tools, tool_choice, thinking=thinking, max_tokens=max_tokens
@@ -442,7 +445,7 @@ class LiteLLMVLMProvider(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> dict[str, Any]:
-        model = self._resolve_model(self.model or "gpt-4o-mini")
+        model = self._resolve_model(self._get_request_model())
         if messages:
             kwargs_messages = messages
         else:

@@ -218,6 +218,82 @@ async def test_vlm_provider_spans_preserve_results_usage_and_operation_parent(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("configured_model", [None, "", "custom-codex-model"])
+@pytest.mark.parametrize(
+    "method",
+    [
+        "get_completion",
+        "get_completion_async",
+        "get_vision_completion",
+        "get_vision_completion_async",
+    ],
+)
+async def test_codex_span_model_matches_actual_responses_request(
+    monkeypatch, vlm_span_exporter, configured_model, method
+):
+    from openviking.models.vlm.backends.codex_vlm import CodexVLM
+
+    response = SimpleNamespace(
+        output=[
+            SimpleNamespace(
+                type="message",
+                content=[SimpleNamespace(type="output_text", text="private response")],
+            )
+        ],
+        usage=SimpleNamespace(input_tokens=11, output_tokens=7, total_tokens=18),
+    )
+    create = Mock(
+        side_effect=lambda **_kwargs: iter(
+            [SimpleNamespace(type="response.completed", response=response)]
+        )
+    )
+    client = SimpleNamespace(responses=SimpleNamespace(create=create))
+    vlm = CodexVLM({"model": configured_model, "api_key": "private-key", "max_retries": 0})
+    monkeypatch.setattr(vlm, "_build_responses_client", lambda *_args: client)
+    result = getattr(vlm, method)(prompt="private prompt")
+    if method.endswith("_async"):
+        result = await result
+    assert result == "private response"
+    request_model = create.call_args.kwargs["model"]
+    assert request_model == (configured_model or "gpt-5.3-codex")
+    spans = _chat_spans(vlm_span_exporter)
+    assert len(spans) == 1
+    assert spans[0].name == f"chat {request_model}"
+    assert spans[0].attributes["gen_ai.request.model"] == request_model
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["openai", "litellm"])
+async def test_vlm_known_default_model_matches_request(monkeypatch, vlm_span_exporter, backend):
+    vlm, _, call = _traced_vlm(monkeypatch, backend, model=None)
+    await vlm.get_completion_async("private prompt")
+    assert call.call_args.kwargs["model"] == "gpt-4o-mini"
+    assert _chat_spans(vlm_span_exporter)[0].attributes["gen_ai.request.model"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_vlm_without_known_default_traces_unknown_model(vlm_span_exporter):
+    from openviking.models.vlm.base import trace_vlm_call
+
+    class UnknownBackend(VLMBase):
+        def get_completion(self, **_kwargs):
+            return "response"
+
+        get_vision_completion = get_completion
+
+        @trace_vlm_call
+        async def get_completion_async(self, **_kwargs):
+            return "response"
+
+        get_vision_completion_async = get_completion_async
+
+    assert await UnknownBackend({"provider": "custom"}).get_completion_async() == "response"
+    span = _chat_spans(vlm_span_exporter)[0]
+    assert span.name == "chat unknown"
+    assert span.attributes["gen_ai.request.model"] == "unknown"
+
+
+@pytest.mark.asyncio
 async def test_vlm_retry_and_failover_span_cardinality(monkeypatch, vlm_span_exporter):
     from openviking.models.vlm.base import FailoverVLM
 

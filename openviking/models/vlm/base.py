@@ -107,6 +107,9 @@ class VLMBase(ABC):
         # Token usage tracking
         self._token_tracker = TokenUsageTracker()
 
+    def _get_request_model(self) -> str:
+        return self.model or "unknown"
+
     @contextmanager
     def _vlm_span(self) -> Iterator[Any]:
         active = _active_vlm_span.get()
@@ -122,9 +125,8 @@ class VLMBase(ABC):
             from openviking.telemetry.model_identity import model_name_for_trace
 
             if tracer_module.is_enabled():
-                model = model_name_for_trace(self.model or "gpt-4o-mini")
-                # Inherit the operation parent without moving existing prompt/response
-                # diagnostic events onto this metadata-only provider span.
+                model = model_name_for_trace(self._get_request_model())
+                # Do not make this span current: prompt/response events stay on the operation.
                 span = tracer_module.get_tracer().start_span(f"chat {model}", kind=SpanKind.CLIENT)
                 span.set_attribute("gen_ai.operation.name", "chat")
                 span.set_attribute("gen_ai.provider.name", str(self.provider))

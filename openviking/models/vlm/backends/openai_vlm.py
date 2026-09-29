@@ -85,6 +85,9 @@ class OpenAIVLM(VLMBase):
         self.reasoning_effort = config.get("reasoning_effort")
         self.keepalive_expiry = config.get("keepalive_expiry")
 
+    def _get_request_model(self) -> str:
+        return self.model or "gpt-4o-mini"
+
     def _http_client_kwargs(self) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {"timeout": self.timeout}
         if self.keepalive_expiry is not None:
@@ -218,7 +221,7 @@ class OpenAIVLM(VLMBase):
                 getattr(completion_tokens_details, "reasoning_tokens", 0) or 0
             )
             self.update_token_usage(
-                model_name=self.model or "gpt-4o-mini",
+                model_name=self._get_request_model(),
                 provider=self.provider,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
@@ -281,7 +284,7 @@ class OpenAIVLM(VLMBase):
         kwargs_messages = sanitize_openai_messages(
             messages or [{"role": "user", "content": prompt}]
         )
-        model = self.model or "gpt-4o-mini"
+        model = self._get_request_model()
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": kwargs_messages,
@@ -312,7 +315,7 @@ class OpenAIVLM(VLMBase):
                 content.append({"type": "text", "text": prompt})
             kwargs_messages = sanitize_openai_messages([{"role": "user", "content": content}])
 
-        model = self.model or "gpt-4o-mini"
+        model = self._get_request_model()
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": kwargs_messages,
