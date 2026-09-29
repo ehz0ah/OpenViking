@@ -9,13 +9,11 @@ For Hermes releases that still bundle OpenViking, follow the
 [Hermes integration guide](../../docs/en/agent-integrations/05-hermes.md) and run
 `hermes memory setup openviking`. No external plugin installation is needed.
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for the source, license, migration contract,
-and test commands.
+For development and licensing details, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Install
 
-Hermes v2026.9.24 is the tested release baseline. CI also tests a reviewed Hermes
-main commit; see [DEVELOPMENT.md](DEVELOPMENT.md).
+Hermes v2026.9.24 is the tested release baseline.
 
 For a direct installation, replace the placeholder with the reviewed OpenViking
 commit's full 40-character SHA:
@@ -36,9 +34,7 @@ Hermes's dependency constraints when you enable the plugin.
 If Hermes still includes the bundled OpenViking provider, that copy takes
 precedence. The external copy becomes active after the bundled copy is removed.
 Keep `memory.provider: openviking` and your existing configuration. No memory
-data needs to move. Automatic installation after core removal also requires a
-published `openviking` entry in the Hermes catalog; this directory alone does
-not register one.
+data needs to move.
 
 ## Upgrade
 
@@ -55,8 +51,8 @@ hermes plugins install 'volcengine/OpenViking/examples/hermes-plugin' \
 ```
 
 Existing connection settings and server data are retained. Restart Hermes or
-the gateway after the upgrade. Once the plugin is registered in the Hermes
-catalog, copies installed through the catalog use `hermes plugins update openviking`.
+the gateway after the upgrade. For catalog installations, use
+`hermes plugins update openviking`.
 
 ## Requirements
 
@@ -307,15 +303,10 @@ the new connection from earlier mappings. New files require a server-confirmed
 user identity. Missing or ambiguous mappings block replacement and deletion
 with a warning; the plugin never selects a target by semantic similarity.
 
-Replacement and deletion require Hermes to provide authoritative
-`previous_content` metadata from the native-store commit. Older Hermes versions
-without this event contract skip those mirror operations with a warning; native
-local memory still changes. The plugin never falls back to matching the caller's
-`old_text` against its partial registry.
-The required event contract was merged in
-[Hermes PR #120003](https://github.com/NousResearch/hermes-agent/pull/120003)
-(commit `5908e1aaa83e82aaf12541d7a9d90762d0b46a64`), which landed
-[#118903](https://github.com/NousResearch/hermes-agent/pull/118903).
+Replacement and deletion require Hermes to provide the full previous entry
+content after its local memory write succeeds. If this data is unavailable,
+the plugin skips those mirror operations with a warning; local memory still
+changes. It does not guess which remote entry to change.
 
 Only entries created by this mirror have mappings. Session-extracted memories,
 explicit `viking_remember` results, and copies created before this registry are
