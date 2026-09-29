@@ -57,12 +57,12 @@ the gateway after the upgrade. For catalog installations, use
 ## Requirements
 
 - Python 3.11 or newer in the Hermes environment
-- An OpenViking server reachable from Hermes, or OpenViking Service credentials
+- A reachable OpenViking server, OpenViking Service credentials, or Quick Local setup
 - For a self-hosted server, OpenViking installed in its own environment or container
 
-The plugin connects over HTTP. Do not install the OpenViking server into the
-Hermes environment. For local server start from the setup wizard, make the
-`openviking-server` command available on `PATH`.
+The plugin connects over HTTP. Keep the server in a separate environment.
+Quick Local creates that environment for you. For Custom setup to start a local
+server, make `openviking-server` available on `PATH`.
 
 OpenViking 0.2.14 or newer is required. Hermes can identify older servers that
 expose the legacy status-only health response, but those releases do not provide
@@ -72,7 +72,7 @@ admin credentials, and OpenViking 0.4.17 or newer for root or local development.
 
 ## Setup
 
-For a self-hosted deployment, prepare OpenViking in its server environment:
+For a Custom self-hosted deployment, prepare OpenViking in its server environment:
 
 ```bash
 openviking-server init
@@ -89,6 +89,25 @@ hermes memory setup openviking
 The setup can link to an existing `~/.openviking/ovcli.conf`, copy its current
 connection values into Hermes, or create a minimal `ovcli.conf` when one does
 not exist.
+
+For a new connection, choose **OpenViking Service**, **Custom**, or **Quick Local**.
+
+Quick Local installs OpenViking 0.4.22 or newer in a private runtime. It uses
+`bge-small-zh-v1.5-f16` for local embeddings and copies the configured Hermes LLM
+settings for memory extraction. The LLM must use a static API key and an
+OpenAI-compatible or Anthropic-compatible API. OAuth and cloud-native
+credentials cannot be copied; use Custom for those deployments.
+
+Quick Local stores its runtime, data, model cache, and private configuration in
+`$HERMES_HOME/openviking/`. It binds to localhost and starts in the background
+when Hermes first uses memory. The embedding model downloads once, about
+46 MiB. The LLM can still use a remote API. Server logs are in
+`$HERMES_HOME/logs/openviking-server.log`.
+
+Run setup again after changing the Hermes model or API key. If the server is
+already running, setup reports that it needs a restart. Stop that Quick Local
+server, then start a new Hermes session. Hermes starts it with the saved settings.
+Cloud and Custom connections retain their existing behavior.
 
 Setup first asks how the Hermes instance is used:
 

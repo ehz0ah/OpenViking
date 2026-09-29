@@ -45,6 +45,8 @@ from hermes_constants import get_hermes_home, get_process_hermes_home
 from tools.registry import tool_error
 from utils import atomic_json_write, env_var_enabled
 
+from . import quick_local
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover - Windows
@@ -870,21 +872,36 @@ def _profile_openviking_env(hermes_home: Optional[str]) -> Optional[dict]:
         return {}  # A failed profile read must not borrow another profile's credentials.
 
 
+def _provider_ovcli_config_path(provider_config: dict, *, env: Optional[dict] = None, hermes_home=None) -> Path:
+    if provider_config.get("deployment") == quick_local.DEPLOYMENT:
+        return quick_local.managed_paths(Path(hermes_home or get_hermes_home())).ovcli_config
+    return _resolve_ovcli_config_path(str(provider_config.get("ovcli_config_path") or ""), env=env)
+
+
 def _ovcli_values_for(provider_config: dict, *, env: Optional[dict] = None) -> dict:
     """Connection values from the linked ovcli profile, or {} when none is linked."""
     if not provider_config.get("use_ovcli_config"):
         return {}
-    ovcli_path = _resolve_ovcli_config_path(str(provider_config.get("ovcli_config_path") or ""), env=env)
+    if provider_config.get("deployment") == quick_local.DEPLOYMENT:
+        return _connection_values_from_ovcli(quick_local.connection_config(provider_config, get_hermes_home()))
+    ovcli_path = _provider_ovcli_config_path(provider_config, env=env)
     return _connection_values_from_ovcli(_load_ovcli_config(ovcli_path))
 
 
-def _resolve_connection_settings(provider_config: Optional[dict] = None, *, env: Optional[dict] = None) -> dict:
+def _resolve_connection_settings(provider_config: Optional[dict] = None, *, env: Optional[dict] = None, hermes_home=None) -> dict:
     """Layering: env -> linked ovcli profile -> config.yaml -> built-in default.
     An env account/user (even empty) is authoritative; the secret api_key never
     comes from config.yaml. Every env read goes through the profile secret scope:
     under multiplexing ``os.environ`` is the DEFAULT profile's .env, and a raw read
     would spend its key and tenant on behalf of a secondary profile."""
     provider_config = dict(provider_config or {})
+    if provider_config.get("deployment") == quick_local.DEPLOYMENT:
+        try:
+            profile = quick_local.connection_config(provider_config, Path(hermes_home or get_hermes_home()))
+        except quick_local.QuickLocalSetupError as exc:
+            raise _OpenVikingEndpointError(str(exc)) from exc
+        values = _connection_values_from_ovcli(profile)
+        return {key: values[key] or ("default" if key in ("account", "user") else _DEFAULT_AGENT if key == "agent" else "") for key in _CONNECTION_KEYS}
     ovcli_values = _ovcli_values_for(provider_config, env=env)
 
     def layered(key: str, default: str = "", *, env_authoritative: bool = False) -> str:
@@ -1360,7 +1377,12 @@ class OpenVikingMemoryProvider(MemoryProvider):
         """The resolved ovcli config (default ~/.openviking/ovcli.conf) so endpoint/api-key
         survive backup/import. The backup walk itself drops paths outside $HOME."""
         try:
-            return [str(_resolve_ovcli_config_path())]
+            config, env = self._profile_config_and_env()
+            if not config.get("use_ovcli_config"):
+                return []
+            home = Path(self._hermes_home or get_hermes_home()).resolve()
+            path = _provider_ovcli_config_path(config, env=env, hermes_home=home)
+            return [] if path.resolve().is_relative_to(home) else [str(path)]
         except Exception:
             return []
 
@@ -1465,7 +1487,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if not provider_config.get("use_ovcli_config"):
             return {key: "(set)" if key in ("api_key", "root_api_key") else value for key, value in provider_config.items()}
 
-        ovcli_path = _resolve_ovcli_config_path(str(provider_config.get("ovcli_config_path") or ""))
+        ovcli_path = _provider_ovcli_config_path(provider_config)
         display = {"use_ovcli_config": True, "ovcli_config_path": str(ovcli_path)}
         try:
             settings = _resolve_connection_settings(provider_config)
@@ -1474,7 +1496,10 @@ class OpenVikingMemoryProvider(MemoryProvider):
             return display
         display["endpoint"] = settings.get("endpoint") or _DEFAULT_ENDPOINT
         display.update({key: settings[key] for key in ("agent", "account", "user") if settings.get(key)})
-        if env_overrides := [key for key in _OPENVIKING_ENV_KEYS if key in os.environ]:
+        if provider_config.get("deployment") == quick_local.DEPLOYMENT:
+            display["deployment"] = quick_local.DEPLOYMENT
+            display["server_config_path"] = str(quick_local.managed_paths(get_hermes_home()).server_config)
+        elif env_overrides := [key for key in _OPENVIKING_ENV_KEYS if key in os.environ]:
             display["env_overrides"] = ", ".join(env_overrides)
         return display
 
@@ -1532,7 +1557,10 @@ class OpenVikingMemoryProvider(MemoryProvider):
         def stale() -> bool:
             return self._shutting_down or self._endpoint != endpoint
 
-        if not _wait_for_openviking_health(endpoint, timeout_seconds=_LOCAL_OPENVIKING_AUTOSTART_TIMEOUT, should_stop=stale):
+        config, _env = self._profile_config_and_env()
+        managed = config.get("deployment") == quick_local.DEPLOYMENT
+        timeout = quick_local._HEALTH_TIMEOUT_SECONDS if managed else _LOCAL_OPENVIKING_AUTOSTART_TIMEOUT
+        if not _wait_for_openviking_health(endpoint, timeout_seconds=timeout, should_stop=stale):
             if not stale():
                 _emit_runtime(_runtime_openviking_timeout_message(endpoint), warning_callback)
             return
@@ -1543,6 +1571,11 @@ class OpenVikingMemoryProvider(MemoryProvider):
             try:
                 client = self._build_client(endpoint)
                 healthy = client.health()
+                if healthy and managed:
+                    paths = quick_local.managed_paths(Path(self._hermes_home or get_hermes_home()))
+                    healthy = quick_local.server_belongs_to_profile(paths, endpoint)
+                    if healthy:
+                        healthy = quick_local.clear_server_restart_required(paths.server_config)
                 if stale():
                     return
                 warning_message = "" if healthy else f"OpenViking server at {endpoint} is still not reachable after auto-start. {_RETRY_LATER}"
@@ -1573,7 +1606,18 @@ class OpenVikingMemoryProvider(MemoryProvider):
             if self._shutting_down or self._runtime_start_pending or (self._runtime_start_thread and self._runtime_start_thread.is_alive()):
                 return
             self._runtime_start_pending = True
-            start_state, start_message = _start_local_openviking_server(endpoint)
+            config, _env = self._profile_config_and_env()
+            if config.get("deployment") == quick_local.DEPLOYMENT:
+                paths = quick_local.managed_paths(Path(self._hermes_home or get_hermes_home()))
+                try:
+                    quick_local.connection_config(config, paths.root.parent)
+                    quick_local._start_validation_server(endpoint, paths.server_config, paths.root.parent, paths.server_command)
+                except quick_local.QuickLocalSetupError as exc:
+                    start_state, start_message = _LOCAL_SERVER_FAILED, str(exc)
+                else:
+                    start_state, start_message = _LOCAL_SERVER_STARTED, f"Started Quick Local at {endpoint}. Logs: {paths.root.parent / _OPENVIKING_SERVER_LOG_RELATIVE_PATH}"
+            else:
+                start_state, start_message = _start_local_openviking_server(endpoint)
             if start_state != _LOCAL_SERVER_STARTED:
                 self._runtime_start_pending = False
 
@@ -1594,8 +1638,9 @@ class OpenVikingMemoryProvider(MemoryProvider):
         self._hermes_home = requested_home or str(get_hermes_home())
         self._hermes_home_bound = bool(requested_home)
         connection_error = ""
+        config, env = self._profile_config_and_env()
         try:
-            settings = self._resolve_bound_connection_settings()
+            settings = self._resolve_bound_connection_settings(config, env)
         except _OpenVikingEndpointError as exc:
             connection_error = str(exc)
             settings = dict.fromkeys(_CONNECTION_KEYS, "")
@@ -1627,6 +1672,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if connection_error:
             self._failed_refresh = (("invalid-endpoint", connection_error), time.monotonic())
             _emit_runtime(f"{connection_error} {_FIX_ENDPOINT}", warning_callback)
+        elif config.get("deployment") == quick_local.DEPLOYMENT:
+            self._client = self._ensure_client_locked()
         else:
             try:
                 self._client = self._build_client()
@@ -1667,9 +1714,10 @@ class OpenVikingMemoryProvider(MemoryProvider):
         env = _profile_openviking_env(home)
         return _load_hermes_openviking_config(home, env=env), env
 
-    def _resolve_bound_connection_settings(self) -> dict:
-        config, env = self._profile_config_and_env()
-        return _resolve_connection_settings(config, env=env)
+    def _resolve_bound_connection_settings(self, config=None, env=None) -> dict:
+        if config is None:
+            config, env = self._profile_config_and_env()
+        return _resolve_connection_settings(config, env=env, hermes_home=self._hermes_home or get_hermes_home())
 
     def _in_cooldown(self, failed_key) -> bool:
         failed = self._failed_refresh
@@ -1680,8 +1728,9 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if self._shutting_down:
             self._client = None
             return None
+        config, env = self._profile_config_and_env()
         try:
-            settings = self._resolve_bound_connection_settings()
+            settings = self._resolve_bound_connection_settings(config, env)
         except _OpenVikingEndpointError as exc:
             failed_key = ("invalid-endpoint", str(exc))
             if not self._in_cooldown(failed_key):
@@ -1689,6 +1738,15 @@ class OpenVikingMemoryProvider(MemoryProvider):
             self._failed_refresh = (failed_key, time.monotonic())
             self._client = None
             return None
+        managed = config.get("deployment") == quick_local.DEPLOYMENT
+        if managed:
+            paths = quick_local.managed_paths(Path(self._hermes_home or get_hermes_home()))
+            if paths.restart_required_marker.is_file() and _local_openviking_port_is_open(*_local_openviking_bind(settings["endpoint"])):
+                if not self._in_cooldown(("quick-local-restart",)):
+                    logger.warning("Quick Local needs a server restart to use the saved model or runtime. Stop the Quick Local server, then start a new Hermes session.")
+                self._failed_refresh = (("quick-local-restart",), time.monotonic())
+                self._client = None
+                return None
         settings_key = tuple(settings[k] for k in _CONNECTION_KEYS)
         if settings_key == self._settings_tuple():
             if self._client is not None:
@@ -1711,6 +1769,14 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
         health_state, health_message = _classify_runtime_openviking_health(client, settings_key[0])
         if health_state == "healthy":
+            if managed and not quick_local.server_belongs_to_profile(paths, settings_key[0]):
+                if not self._in_cooldown(settings_key):
+                    logger.warning("Quick Local could not verify ownership of its saved endpoint. Run hermes memory setup openviking again.")
+                self._failed_refresh = (settings_key, time.monotonic())
+                self._client = None
+                return None
+            if managed:
+                quick_local.clear_server_restart_required(paths.server_config)
             self._publish_client(client, settings_key[0])
             return self._client
         self._failed_refresh = (settings_key, time.monotonic())

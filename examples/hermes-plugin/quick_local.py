@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import socket
 import subprocess
 import sys
@@ -22,13 +23,15 @@ from urllib.parse import urlparse
 
 from packaging.requirements import Requirement
 from packaging.version import InvalidVersion, Version
-
 from utils import atomic_json_write
 
 DEPLOYMENT = "quick_local"
 EMBEDDING_MODEL = "bge-small-zh-v1.5-f16"
 EMBEDDING_DIMENSION = 512
-OPENVIKING_REQUIREMENT = "openviking[local-embed]>=0.4.16,<0.6"
+OPENVIKING_REQUIREMENT = "openviking[local-embed]>=0.4.22,<0.5"
+# Later LiteLLM releases exclude Python 3.14. OpenViking supports this version.
+# This restriction applies only to the private server, never Hermes's dependencies.
+INSTALL_REQUIREMENTS = [OPENVIKING_REQUIREMENT, 'litellm==1.83.7; python_version >= "3.14"']
 
 _OPENVIKING_REQUIREMENT = Requirement(OPENVIKING_REQUIREMENT)
 _OPENVIKING_VERSION_SPECIFIER = _OPENVIKING_REQUIREMENT.specifier
@@ -78,13 +81,25 @@ class QuickLocalPaths:
     def runtime_python(self) -> Path:
         scripts = "Scripts" if os.name == "nt" else "bin"
         executable = "python.exe" if os.name == "nt" else "python"
-        return self.runtime / scripts / executable
+        try:
+            from pm.operations import environment_python
+        except ImportError:  # Hermes v2026.9.24 uses the earlier uv installer.
+            selected = None
+        else:
+            selected = environment_python("openviking-local", root=self.runtime)
+        return selected or self.runtime / scripts / executable
 
     @property
     def server_command(self) -> Path:
         scripts = "Scripts" if os.name == "nt" else "bin"
         executable = "openviking-server.exe" if os.name == "nt" else "openviking-server"
-        return self.runtime / scripts / executable
+        try:
+            from pm.operations import python_tool
+        except ImportError:
+            selected = None
+        else:
+            selected = python_tool("openviking-local", "openviking-server", root=self.runtime)
+        return selected or self.runtime / scripts / executable
 
     @property
     def restart_required_marker(self) -> Path:
@@ -114,7 +129,9 @@ HealthCheck = Callable[[str], tuple[bool, str]]
 
 
 def managed_paths(hermes_home: Path) -> QuickLocalPaths:
-    root = Path(hermes_home).expanduser() / _ROOT_DIRNAME
+    root = Path(hermes_home).expanduser().absolute() / _ROOT_DIRNAME
+    if root.is_symlink():
+        raise QuickLocalSetupError("Quick Local directory must belong to this Hermes profile.")
     return QuickLocalPaths(
         root=root,
         runtime=root / "runtime",
@@ -171,7 +188,12 @@ def build_server_config(
     port: int = _DEFAULT_PORT,
 ) -> dict[str, Any]:
     return {
-        "server": {"host": "127.0.0.1", "port": port},
+        "server": {
+            "host": "127.0.0.1",
+            "port": port,
+            "auth_mode": "api_key",
+            "root_api_key": _server_key(paths),
+        },
         "storage": {"workspace": str(paths.workspace)},
         "embedding": {
             "dense": {
@@ -206,9 +228,7 @@ def resolve_hermes_vlm_config() -> dict[str, Any]:
         nested_model, nested_provider = split_model_config_default(default_model)
         default_model = nested_model
         requested_provider = requested_provider or nested_provider or None
-    model = _clean_value(
-        default_model or model_config.get("model") or model_config.get("name")
-    )
+    model = _clean_value(default_model or model_config.get("model") or model_config.get("name"))
     if not model:
         raise QuickLocalSetupError("Hermes has no default LLM model configured.")
 
@@ -226,13 +246,9 @@ def resolve_hermes_vlm_config() -> dict[str, Any]:
     api_key = _clean_value(raw_api_key)
 
     if raw_api_base is not None and not isinstance(raw_api_base, str):
-        raise QuickLocalSetupError(
-            "Hermes' LLM provider API base URL must be a string."
-        )
+        raise QuickLocalSetupError("Hermes' LLM provider API base URL must be a string.")
     if not api_base:
-        raise QuickLocalSetupError(
-            "Hermes' LLM provider did not resolve an API base URL."
-        )
+        raise QuickLocalSetupError("Hermes' LLM provider did not resolve an API base URL.")
     if raw_api_key is None or (isinstance(raw_api_key, str) and not api_key):
         raise QuickLocalSetupError(
             "Hermes' LLM provider did not resolve reusable static credentials."
@@ -340,9 +356,7 @@ class QuickLocalSetup:
                     "Quick Local's saved endpoint does not contain a valid port."
                 )
             server_config = build_server_config(preflight.paths, vlm, port=port)
-            config_changed = not _stored_server_config_matches(
-                preflight.paths, server_config
-            )
+            config_changed = not _stored_server_config_matches(preflight.paths, server_config)
             if runtime_changed or config_changed:
                 _mark_server_restart_required(preflight.paths)
             if config_changed:
@@ -351,7 +365,7 @@ class QuickLocalSetup:
                     server_config,
                     mode=0o600,
                 )
-                _write_ovcli_profile(preflight.paths.ovcli_config, reusable_endpoint)
+                _write_ovcli_profile(preflight.paths.ovcli_config, reusable_endpoint, server_config)
                 self._emit(
                     QuickLocalStage.WRITE_CONFIG,
                     "Updated Quick Local's saved Hermes LLM settings; the running "
@@ -368,9 +382,7 @@ class QuickLocalSetup:
                 server_restart_required=preflight.paths.restart_required_marker.is_file(),
             )
 
-        port = find_available_port(
-            preferred_endpoint=_configured_endpoint(preflight.paths)
-        )
+        port = find_available_port(preferred_endpoint=_configured_endpoint(preflight.paths))
         if port is None:
             last_port = _DEFAULT_PORT + _PORT_ATTEMPTS - 1
             raise QuickLocalSetupError(
@@ -387,13 +399,11 @@ class QuickLocalSetup:
         )
 
         if not clear_server_restart_required(preflight.paths.server_config):
-            raise QuickLocalSetupError(
-                "Could not clear Quick Local's stale restart marker."
-            )
+            raise QuickLocalSetupError("Could not clear Quick Local's stale restart marker.")
         _prepare_private_directory(preflight.paths.root)
         preflight.paths.workspace.mkdir(parents=True, exist_ok=True)
         atomic_json_write(preflight.paths.server_config, server_config, mode=0o600)
-        _write_ovcli_profile(preflight.paths.ovcli_config, endpoint)
+        _write_ovcli_profile(preflight.paths.ovcli_config, endpoint, server_config)
         self._emit(
             QuickLocalStage.WRITE_CONFIG,
             f"Saved Quick Local configuration to {preflight.paths.server_config}.",
@@ -416,56 +426,68 @@ class QuickLocalSetup:
             QuickLocalStage.INSTALL_OPENVIKING,
             f"Installing {OPENVIKING_REQUIREMENT}...",
         )
+        _prepare_private_directory(paths.root)
         try:
-            from hermes_cli.managed_uv import ensure_uv
-
-            uv = ensure_uv()
-            if not uv:
-                raise QuickLocalSetupError("uv is required to install OpenViking.")
-            _prepare_private_directory(paths.root)
-            install_env = os.environ.copy()
-            install_env["UV_NATIVE_TLS"] = "true"
-            install_env["UV_SYSTEM_CERTS"] = "true"
-            if not paths.runtime_python.is_file():
-                venv_result = subprocess.run(
-                    [uv, "venv", str(paths.runtime), "--python", sys.executable],
-                    cwd=paths.root,
-                    env=install_env,
-                    check=False,
-                    stdin=subprocess.DEVNULL,
-                    timeout=120,
+            from pm.client import ensure_python_tool
+        except ImportError:  # Before Hermes PM, retain its supported installer.
+            self._install_with_uv(paths)
+        else:
+            try:
+                ensure_python_tool(
+                    "openviking-local",
+                    INSTALL_REQUIREMENTS,
+                    "openviking-server",
+                    root=paths.runtime,
+                    explicit=True,
+                    timeout=1800,
                 )
-                if venv_result.returncode != 0:
-                    raise QuickLocalSetupError(
-                        "Could not create the private OpenViking environment."
-                    )
-            result = subprocess.run(
+            except Exception as exc:
+                raise QuickLocalSetupError(
+                    "Could not install the private OpenViking runtime. Review the installer output."
+                ) from exc
+        if not openviking_install_satisfies_requirement(paths):
+            raise QuickLocalSetupError(
+                "Could not install a compatible OpenViking local embedding runtime."
+            )
+        return True
+
+    def _install_with_uv(self, paths: QuickLocalPaths) -> None:
+        from hermes_cli.managed_uv import ensure_uv
+
+        uv = ensure_uv()
+        if not uv:
+            raise QuickLocalSetupError("Hermes could not prepare its uv installer.")
+        env = os.environ.copy()
+        env.update(UV_NATIVE_TLS="true", UV_SYSTEM_CERTS="true")
+        commands = []
+        if not paths.runtime_python.is_file():
+            commands.append(([uv, "venv", str(paths.runtime), "--python", sys.executable], 120))
+        commands.append(
+            (
                 [
                     uv,
                     "pip",
                     "install",
                     "--python",
                     str(paths.runtime_python),
-                    OPENVIKING_REQUIREMENT,
+                    *INSTALL_REQUIREMENTS,
                 ],
+                1800,
+            )
+        )
+        for command, timeout in commands:
+            result = subprocess.run(
+                command,
                 cwd=paths.root,
-                env=install_env,
-                check=False,
+                env=env,
                 stdin=subprocess.DEVNULL,
-                timeout=600,
+                check=False,
+                timeout=timeout,
             )
-        except Exception as exc:
-            if isinstance(exc, QuickLocalSetupError):
-                raise
-            raise QuickLocalSetupError(f"Could not install OpenViking: {exc}") from exc
-        if result.returncode != 0 or not openviking_install_satisfies_requirement(
-            paths
-        ):
-            raise QuickLocalSetupError(
-                "Could not install a compatible OpenViking version. Review the "
-                "installer output above."
-            )
-        return True
+            if result.returncode:
+                raise QuickLocalSetupError(
+                    "Could not install the private OpenViking runtime. Review the installer output."
+                )
 
     def _validate_generated_config(
         self,
@@ -475,14 +497,10 @@ class QuickLocalSetup:
         server_config: dict[str, Any],
     ) -> None:
         _prepare_private_directory(paths.root)
-        with tempfile.TemporaryDirectory(
-            prefix="setup-validation-", dir=paths.root
-        ) as root:
+        with tempfile.TemporaryDirectory(prefix="setup-validation-", dir=paths.root) as root:
             validation_root = Path(root)
             validation_config = json.loads(json.dumps(server_config))
-            validation_config["storage"]["workspace"] = str(
-                validation_root / _WORKSPACE_DIRNAME
-            )
+            validation_config["storage"]["workspace"] = str(validation_root / _WORKSPACE_DIRNAME)
             config_path = validation_root / _SERVER_CONFIG_FILENAME
             atomic_json_write(config_path, validation_config, mode=0o600)
 
@@ -504,9 +522,14 @@ class QuickLocalSetup:
             )
             primary_error: BaseException | None = None
             try:
+
+                def validated_health(url):
+                    healthy, message = self._health_check(url)
+                    return healthy and _server_accepts_config(validation_config, url), message
+
                 if not _wait_for_health(
                     endpoint,
-                    self._health_check,
+                    validated_health,
                     process=process,
                 ):
                     returncode = process.poll()
@@ -597,7 +620,7 @@ def find_reusable_endpoint(
     if endpoint is None:
         return None
     healthy, _message = health_check(endpoint)
-    return endpoint if healthy else None
+    return endpoint if healthy and server_belongs_to_profile(paths, endpoint) else None
 
 
 def _configured_endpoint(paths: QuickLocalPaths) -> Optional[str]:
@@ -605,27 +628,97 @@ def _configured_endpoint(paths: QuickLocalPaths) -> Optional[str]:
         return None
     try:
         server_config = json.loads(paths.server_config.read_text(encoding="utf-8"))
-        storage = (
-            server_config.get("storage", {}) if isinstance(server_config, dict) else {}
-        )
+        storage = server_config.get("storage", {}) if isinstance(server_config, dict) else {}
         if not isinstance(storage, dict) or not _paths_equivalent(
             storage.get("workspace"), paths.workspace
         ):
             return None
         profile = json.loads(paths.ovcli_config.read_text(encoding="utf-8"))
-        return _normalize_local_endpoint(
-            profile.get("url") if isinstance(profile, dict) else ""
-        )
+        return _normalize_local_endpoint(profile.get("url") if isinstance(profile, dict) else "")
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return None
 
 
-def _write_ovcli_profile(path: Path, endpoint: str) -> None:
+def _server_key(paths: QuickLocalPaths) -> str:
+    try:
+        saved = json.loads(paths.server_config.read_text(encoding="utf-8"))
+        if _paths_equivalent(saved.get("storage", {}).get("workspace"), paths.workspace):
+            key = _clean_value(saved.get("server", {}).get("root_api_key"))
+            if key:
+                return key
+    except (OSError, ValueError, AttributeError):
+        pass
+    return secrets.token_urlsafe(32)
+
+
+def server_belongs_to_profile(paths: QuickLocalPaths, endpoint: str) -> bool:
+    """Do not reuse an unrelated service that took the saved local port."""
+    try:
+        saved = json.loads(paths.server_config.read_text(encoding="utf-8"))
+        if not _paths_equivalent(saved.get("storage", {}).get("workspace"), paths.workspace):
+            return False
+        return _server_accepts_config(saved, endpoint)
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _server_accepts_config(config: Mapping[str, Any], endpoint: str) -> bool:
+    import httpx
+
+    try:
+        key = _clean_value(config.get("server", {}).get("root_api_key"))
+        if not key:
+            return False
+        with httpx.Client(timeout=3.0, trust_env=False) as client:
+            health = client.get(f"{endpoint}/health").json()
+            if health.get("auth_mode") != "api_key":
+                return False
+            response = client.get(f"{endpoint}/api/v1/admin/accounts", headers={"X-API-Key": key})
+            return response.status_code == 200 and response.json().get("status") == "ok"
+    except (ValueError, AttributeError, httpx.HTTPError):
+        return False
+
+
+def _write_ovcli_profile(path: Path, endpoint: str, server_config: Mapping[str, Any]) -> None:
     atomic_json_write(
         path,
-        {"url": endpoint, "actor_peer_id": "hermes"},
+        {
+            "url": endpoint,
+            "root_api_key": server_config["server"]["root_api_key"],
+            "account": "default",
+            "user": "default",
+            "actor_peer_id": "hermes",
+        },
         mode=0o600,
     )
+
+
+def connection_config(provider_config: Mapping[str, Any], hermes_home: Path) -> dict[str, Any]:
+    """Resolve only this profile's managed files, including after profile import."""
+    paths = managed_paths(hermes_home)
+    endpoint = _configured_endpoint(paths)
+    if endpoint is None:
+        raise QuickLocalSetupError(
+            "Quick Local configuration is missing or belongs to another profile. Run hermes memory setup openviking again."
+        )
+    try:
+        profile = json.loads(paths.ovcli_config.read_text(encoding="utf-8"))
+        saved = json.loads(paths.server_config.read_text(encoding="utf-8"))
+        if not isinstance(profile, dict) or not isinstance(saved, dict):
+            raise ValueError("invalid configuration")
+    except (OSError, ValueError) as exc:
+        raise QuickLocalSetupError(
+            "Quick Local configuration could not be read. Run hermes memory setup openviking again."
+        ) from exc
+    if (
+        not isinstance(saved.get("server"), dict)
+        or not profile.get("root_api_key")
+        or profile["root_api_key"] != saved["server"].get("root_api_key")
+    ):
+        raise QuickLocalSetupError(
+            "Quick Local credentials are incomplete. Run hermes memory setup openviking again."
+        )
+    return profile
 
 
 def _start_validation_server(
@@ -635,9 +728,7 @@ def _start_validation_server(
     server_command: Path,
 ) -> subprocess.Popen:
     if not server_command.is_file():
-        raise QuickLocalSetupError(
-            "openviking-server was not found after installation."
-        )
+        raise QuickLocalSetupError("openviking-server was not found after installation.")
     command = str(server_command)
     host, port = _endpoint_bind(endpoint)
     if not _can_bind_local_port(host, port):
@@ -647,6 +738,9 @@ def _start_validation_server(
         )
     log_path = _server_log_path(hermes_home)
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    if not log_path.exists():
+        log_path.touch(mode=0o600)
+    log_path.chmod(0o600)
     child_env = os.environ.copy()
     child_env.pop("PYTHONPATH", None)
     from hermes_cli._subprocess_compat import windows_detach_popen_kwargs
@@ -667,6 +761,7 @@ def _start_validation_server(
                 "stdout": log_file,
                 "stderr": log_file,
                 "env": child_env,
+                "cwd": hermes_home,
             }
             try:
                 return subprocess.Popen(
@@ -742,26 +837,26 @@ def _has_copyable_static_credentials(
         return False
 
     if provider == "custom":
-        return source in {"direct-alias", "env/config"} or source.startswith((
-            "custom_provider:",
-            "pool:",
-        ))
+        return source in {"direct-alias", "env/config"} or source.startswith(
+            (
+                "custom_provider:",
+                "pool:",
+            )
+        )
     if provider == "openrouter":
-        return source == "env/config" or source.startswith((
-            "credential_pool:",
-            "env:",
-            "manual:",
-            "pool:",
-        ))
+        return source == "env/config" or source.startswith(
+            (
+                "credential_pool:",
+                "env:",
+                "manual:",
+                "pool:",
+            )
+        )
 
     from hermes_cli.auth import PROVIDER_REGISTRY
 
     provider_config = PROVIDER_REGISTRY.get(provider)
-    if (
-        provider == "copilot"
-        or provider_config is None
-        or provider_config.auth_type != "api_key"
-    ):
+    if provider == "copilot" or provider_config is None or provider_config.auth_type != "api_key":
         return False
 
     if source in {"config", "default", "env", "local-offline"}:
@@ -789,10 +884,8 @@ def _stored_server_config_matches(
 
 def _prepare_private_directory(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    try:
+    if os.name != "nt":
         path.chmod(0o700)
-    except OSError:
-        pass
 
 
 def _server_log_path(hermes_home: Path) -> Path:
