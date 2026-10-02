@@ -189,6 +189,7 @@ def main():
 
                 for action in ("crash", "stop"):
                     old_pid = server.status()["pid"]
+                    assert isinstance(old_pid, int), "Managed server must have a verified PID"
                     if action == "crash":
                         process = psutil.Process(old_pid)
                         owned = [*process.children(recursive=True), process]

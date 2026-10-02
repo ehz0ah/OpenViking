@@ -136,7 +136,8 @@ its data. The existing Cloud and Custom connection choices remain available.
 Hermes backups include Quick Local files under the profile home; the plugin
 adds a linked `ovcli.conf` only when it is outside that home.
 
-Before removing the plugin, run `hermes openviking local stop`, then select a
+Before removing the plugin, close Hermes sessions and stop the gateway for
+this profile. Run `hermes openviking local stop`, then select a
 different memory provider or disable OpenViking memory. Finally, run
 `hermes plugins remove openviking`. The private runtime, model cache and data
 remain in `$HERMES_HOME/openviking/`; they can use more than 1 GB per profile.

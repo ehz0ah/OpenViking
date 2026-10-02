@@ -627,3 +627,26 @@ def test_lost_record_adoption_survives_a_selected_runtime_upgrade(servers, modul
     ready(server)
     assert server.status()["pid"] != old_pid
     assert server._read_record()["command"] == str(new_command)
+
+
+def test_stop_from_another_process_accepts_a_terminated_child(servers, modules):
+    """A CLI cannot reap a server whose parent is a running Hermes process."""
+    import json
+    from pathlib import Path
+
+    _home, _p, module, _ql, _life, _packages = modules
+    server = servers("external-stop")
+    ready(server)
+    script = f"""
+import importlib.util,sys
+from pathlib import Path
+sys.path[:0] = {json.dumps(sys.path)}
+spec=importlib.util.spec_from_file_location("external_stop_provider", {json.dumps(module.__file__)}, submodule_search_locations=[{json.dumps(str(Path(module.__file__).parent))}])
+package=importlib.util.module_from_spec(spec);sys.modules[spec.name]=package;spec.loader.exec_module(package)
+from external_stop_provider.local_server import LocalServer
+assert LocalServer(Path({json.dumps(str(server.paths.root.parent))})).stop()
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stderr

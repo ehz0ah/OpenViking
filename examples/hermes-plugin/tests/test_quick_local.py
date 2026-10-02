@@ -849,15 +849,22 @@ def test_preferred_configured_port_is_reused_when_available(monkeypatch):
 
 
 def test_validation_stop_force_kills_only_after_graceful_timeout(monkeypatch):
+    from itertools import count
+
     import psutil
 
     process = MagicMock()
     process.poll.return_value = None
     root, child = MagicMock(), MagicMock()
     root.children.return_value = [child]
+    root.status.return_value = psutil.STATUS_RUNNING
+    child.is_running.return_value = False
+    root.is_running.return_value = True
+    root.kill.side_effect = lambda: setattr(root.is_running, "return_value", False)
     monkeypatch.setattr(psutil, "Process", lambda _pid: root)
-    wait = MagicMock(side_effect=[([child], [root]), ([root], [])])
-    monkeypatch.setattr(psutil, "wait_procs", wait)
+    lifecycle = importlib.import_module(quick_local.__package__ + ".local_server")
+    clock = count(step=quick_local._PROCESS_STOP_TIMEOUT_SECONDS)
+    monkeypatch.setattr(lifecycle.time, "monotonic", lambda: next(clock))
 
     assert quick_local._stop_process(process) is True
 
@@ -865,7 +872,6 @@ def test_validation_stop_force_kills_only_after_graceful_timeout(monkeypatch):
     child.terminate.assert_called_once_with()
     root.kill.assert_called_once_with()
     child.kill.assert_not_called()
-    assert wait.call_args_list[0].args[0] == [child, root]
     process.wait.assert_called_once_with(timeout=quick_local._PROCESS_STOP_TIMEOUT_SECONDS)
 
 

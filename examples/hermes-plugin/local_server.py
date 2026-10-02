@@ -41,6 +41,24 @@ class _RecordedProcess:
             return -1
 
 
+def _wait_stopped(processes, timeout):
+    # A separate CLI cannot reap Hermes's children. A zombie has already
+    # stopped; wait_procs() can otherwise keep reporting it as alive.
+    deadline = time.monotonic() + timeout
+    while True:
+        alive = []
+        for process in processes:
+            try:
+                if process.is_running() and process.status() != psutil.STATUS_ZOMBIE:
+                    alive.append(process)
+            except psutil.NoSuchProcess:
+                pass
+        if not alive or time.monotonic() >= deadline:
+            return alive
+        time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+        processes = alive
+
+
 def stop_process_tree(process, *, timeout=5):
     """Stop an owned parent and its existing children, including Windows launchers."""
     from .quick_local import QuickLocalSetupError
@@ -52,13 +70,13 @@ def stop_process_tree(process, *, timeout=5):
                 child.terminate()
             except psutil.NoSuchProcess:
                 pass
-        _gone, alive = psutil.wait_procs(processes, timeout=timeout)
+        alive = _wait_stopped(processes, timeout)
         for child in alive:
             try:
                 child.kill()
             except psutil.NoSuchProcess:
                 pass
-        _gone, alive = psutil.wait_procs(alive, timeout=timeout)
+        alive = _wait_stopped(alive, timeout)
         if alive:
             raise QuickLocalSetupError(
                 "Quick Local could not stop its server. Review the server log."
