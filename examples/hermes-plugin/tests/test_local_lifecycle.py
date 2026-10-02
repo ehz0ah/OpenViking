@@ -495,16 +495,21 @@ def test_configure_refuses_unverifiable_server_before_changing_live_files(server
 
 
 def test_configure_adopts_a_lost_record_before_changing_the_key(servers):
+    import psutil
+
     server = servers("lost-record")
     ready(server)
     old_pid = server.status()["pid"]
+    old_family = {old_pid, *(p.pid for p in psutil.Process(old_pid).children(recursive=True))}
     server.record_path.unlink()
     config = server._config()
     config["server"]["root_api_key"] = "rotated-test-key"
     server.configure(config)
-    assert server._read_record()["pid"] == old_pid
+    # Windows venv redirectors expose a launcher and a child with the same
+    # command. Either verified member can own the recovered record.
+    assert server._read_record()["pid"] in old_family
     ready(server)
-    assert server.status()["pid"] != old_pid
+    assert server.status()["pid"] not in old_family
     assert server.ql.server_belongs_to_profile(server.paths, server.status()["endpoint"])
 
 
@@ -609,10 +614,13 @@ def test_legacy_install_without_uv_fails_without_repairing_hermes(modules, monke
 
 
 def test_lost_record_adoption_survives_a_selected_runtime_upgrade(servers, modules, monkeypatch):
+    import psutil
+
     _home, _p, _m, ql, _life, _packages = modules
     server = servers("old-runtime")
     ready(server)
     old_pid = server.status()["pid"]
+    old_family = {old_pid, *(p.pid for p in psutil.Process(old_pid).children(recursive=True))}
     server.record_path.unlink()
     old_command = server.paths.server_command
     new_command = server.paths.runtime / "new-generation/bin/openviking-server"
@@ -622,10 +630,10 @@ def test_lost_record_adoption_survives_a_selected_runtime_upgrade(servers, modul
     config = server._config()
     config["server"]["root_api_key"] = "rotated-test-key"
     server.configure(config, runtime_changed=True)
-    assert server._read_record()["pid"] == old_pid
+    assert server._read_record()["pid"] in old_family
     assert server._read_record()["command"] == str(old_command)
     ready(server)
-    assert server.status()["pid"] != old_pid
+    assert server.status()["pid"] not in old_family
     assert server._read_record()["command"] == str(new_command)
 
 
