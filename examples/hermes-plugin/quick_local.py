@@ -481,7 +481,7 @@ class QuickLocalSetup:
         uv = ensure_uv()
         if not uv:
             raise QuickLocalSetupError("Hermes could not prepare its uv installer.")
-        env = os.environ.copy()
+        env = _private_child_env(paths.root.parent)
         env.update(UV_NATIVE_TLS="true", UV_SYSTEM_CERTS="true")
         commands = []
         if not paths.runtime_python.is_file():
@@ -822,16 +822,7 @@ def _start_validation_server(
     if not log_path.exists():
         log_path.touch(mode=0o600)
     log_path.chmod(0o600)
-    from tools.environments import local as subprocess_env
-
-    if hasattr(subprocess_env, "served_profile_child_env"):
-        child_env = subprocess_env.served_profile_child_env(target_home=hermes_home)
-    else:
-        child_env = subprocess_env.hermes_subprocess_env()
-        child_env["HERMES_HOME"] = str(hermes_home)
-    child_env.pop("PYTHONPATH", None)
-    child_env.pop("PYTHONHOME", None)
-    child_env.pop("VIRTUAL_ENV", None)
+    child_env = _private_child_env(hermes_home)
     from hermes_cli._subprocess_compat import windows_detach_popen_kwargs
 
     popen_kwargs: dict[str, Any] = windows_detach_popen_kwargs()
@@ -995,6 +986,19 @@ def repair_private_paths(paths: QuickLocalPaths) -> None:
 
 def _pm_available() -> bool:
     return importlib.util.find_spec("pm") is not None
+
+
+def _private_child_env(hermes_home: Path) -> dict[str, str]:
+    from tools.environments import local as subprocess_env
+
+    if hasattr(subprocess_env, "served_profile_child_env"):
+        env = subprocess_env.served_profile_child_env(target_home=hermes_home)
+    else:
+        env = subprocess_env.hermes_subprocess_env()
+        env["HERMES_HOME"] = str(hermes_home)
+    for key in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
+        env.pop(key, None)
+    return env
 
 
 def _server_log_path(hermes_home: Path) -> Path:

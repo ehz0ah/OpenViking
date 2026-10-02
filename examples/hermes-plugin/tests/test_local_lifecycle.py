@@ -5,7 +5,6 @@ import importlib
 import os
 import subprocess
 import sys
-import time
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock
 
@@ -61,7 +60,7 @@ def servers(modules, monkeypatch):
         command = server.paths.server_command
         command.parent.mkdir(parents=True)
         command.write_text(
-            """import argparse,json,time
+            """import argparse,json,os,time
 from http.server import BaseHTTPRequestHandler,HTTPServer
 p=argparse.ArgumentParser();p.add_argument('--config');p.add_argument('--host');p.add_argument('--port',type=int);a=p.parse_args()
 c=json.load(open(a.config));key=c['server']['root_api_key']
@@ -72,6 +71,8 @@ class Handler(BaseHTTPRequestHandler):
   ok=self.path=='/health' or self.headers.get('X-API-Key')==key
   self.send_response(200 if ok else 401);self.end_headers()
   self.wfile.write(json.dumps({'status':'ok','auth_mode':'trusted','root_api_key_required':True}).encode())
+# Match asyncio/Uvicorn: Windows listeners do not share an active address.
+HTTPServer.allow_reuse_address = os.name != 'nt'
 HTTPServer((a.host,a.port),Handler).serve_forever()
 """,
             encoding="utf-8",
@@ -88,7 +89,8 @@ HTTPServer((a.host,a.port),Handler).serve_forever()
 
 
 def ready(server):
-    return server.wait_ready(server.start(), lambda _url: (True, ""), timeout=5)
+    # Windows connection-refused probes can each take over one second.
+    return server.wait_ready(server.start(), lambda _url: (True, ""), timeout=20)
 
 
 def test_restart_keeps_data_and_changes_only_owned_process(servers):
@@ -133,7 +135,7 @@ def test_concurrent_starts_of_one_profile_create_one_process(servers):
     with ThreadPoolExecutor(max_workers=2) as executor:
         first, second = list(executor.map(lambda _: a.start(), range(2)))
     assert first.process.pid == second.process.pid
-    a.wait_ready(first, lambda _url: (True, ""), timeout=5)
+    a.wait_ready(first, lambda _url: (True, ""), timeout=20)
 
 
 def test_two_profiles_can_recover_a_concurrent_port_race(servers):
@@ -164,10 +166,12 @@ def test_early_server_exit_fails_promptly_and_clears_process_record(servers):
     config = a._config()
     config["vlm"]["crash"] = True
     a.configure(config)
-    start = time.monotonic()
+    started = a.start()
+    assert started.process.wait(timeout=10) == 9
+    health = MagicMock()
     with pytest.raises(a.ql.QuickLocalSetupError, match="did not become ready"):
-        ready(a)
-    assert time.monotonic() - start < 3
+        a.wait_ready(started, health, timeout=600)
+    health.assert_not_called()
     assert not a.record_path.exists()
 
 
@@ -260,6 +264,46 @@ def test_broken_pm_import_never_calls_legacy_uv_shim(modules, monkeypatch):
     with pytest.raises(ImportError, match="transitive"):
         engine._ensure_openviking_installed(ql.managed_paths(home))
     fallback.assert_not_called()
+
+
+@pytest.mark.parametrize("served_profiles", [False, True])
+def test_legacy_installer_uses_profile_child_environment(modules, monkeypatch, served_profiles):
+    from hermes_cli import managed_uv
+    from tools.environments import local as subprocess_env
+
+    home, _p, _m, ql, _life, _packages = modules
+    source_env = {
+        "PATH": os.defpath,
+        "HERMES_HOME": "launch-profile",
+        "OPENVIKING_API_KEY": "profile-key",
+        "PYTHONPATH": "host-pythonpath",
+        "PYTHONHOME": "host-pythonhome",
+        "VIRTUAL_ENV": "host-runtime",
+    }
+    child_env = MagicMock(return_value=source_env.copy())
+    if served_profiles:
+        source_env["HERMES_HOME"] = str(home)
+        child_env.return_value = source_env.copy()
+        monkeypatch.setattr(subprocess_env, "served_profile_child_env", child_env, raising=False)
+    else:
+        monkeypatch.delattr(subprocess_env, "served_profile_child_env", raising=False)
+        monkeypatch.setattr(subprocess_env, "hermes_subprocess_env", child_env)
+    monkeypatch.setattr(managed_uv, "ensure_uv", lambda: "uv")
+    run = MagicMock(return_value=MagicMock(returncode=0))
+    monkeypatch.setattr(ql.subprocess, "run", run)
+    engine = ql.QuickLocalSetup(health_check=lambda _url: (False, ""))
+    engine._install_with_uv(ql.managed_paths(home), ["reviewed-package"])
+    if served_profiles:
+        child_env.assert_called_once_with(target_home=home)
+    else:
+        child_env.assert_called_once_with()
+    assert run.call_count == 2
+    for call in run.call_args_list:
+        env = call.kwargs["env"]
+        assert env["HERMES_HOME"] == str(home)
+        assert env["OPENVIKING_API_KEY"] == "profile-key"
+        assert not any(key in env for key in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"))
+    assert source_env["PYTHONPATH"] == "host-pythonpath"
 
 
 def test_pending_recovery_identity_survives_managed_port_move(modules, monkeypatch):
