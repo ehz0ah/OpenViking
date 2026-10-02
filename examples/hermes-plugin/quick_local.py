@@ -249,11 +249,17 @@ def resolve_hermes_vlm_config() -> dict[str, Any]:
         and source == "local-runtime"
         and isinstance(raw_api_key, str)
         and bool(api_key)
-        and not api_key.startswith("sk-ant-oat")
         and urlparse(api_base).hostname in {"localhost", "127.0.0.1", "::1"}
     )
     declared_key = bool(key_env and source in {key_env, f"env:{key_env}"})
-    if not (
+    from agent.anthropic_credentials import anthropic_route_is_oauth
+
+    # A declared env variable identifies a source, not a static credential.
+    # Hermes owns native Anthropic OAuth authentication and token refresh.
+    oauth_route = api_mode == "anthropic_messages" and isinstance(raw_api_key, str) and (
+        anthropic_route_is_oauth(api_base, raw_api_key, provider=provider)
+    )
+    if oauth_route or not isinstance(raw_api_key, str) or not (
         local_runtime or declared_key or _has_copyable_static_credentials(provider, source, api_key)
     ):
         raise QuickLocalSetupError(
@@ -271,6 +277,8 @@ def resolve_hermes_vlm_config() -> dict[str, Any]:
         )
     vlm: dict[str, Any]
     if api_mode == "anthropic_messages":
+        # Like Hermes's Anthropic SDK, LiteLLM appends /v1/messages itself.
+        api_base = api_base.rstrip("/").removesuffix("/v1")
         if not runtime_model.startswith("anthropic/"):
             runtime_model = f"anthropic/{runtime_model}"
         vlm = {
@@ -948,7 +956,7 @@ def _has_copyable_static_credentials(
 ) -> bool:
     """Return whether Hermes explicitly classifies this credential as static."""
 
-    if not api_key or api_key.startswith("sk-ant-oat") or api_key == "aws-sdk":
+    if not api_key or api_key == "aws-sdk":
         return False
 
     if provider == "custom":

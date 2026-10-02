@@ -12,7 +12,77 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+
+def check_llm_transports(home, ql, runtime_python):
+    """Resolve persisted Hermes routes and observe real installed OV requests."""
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            requests.append(self.path)
+            print("Observed LLM request: " + self.path, flush=True)
+            if self.path == "/v1/chat/completions":
+                body = {"id": "chat-test", "object": "chat.completion", "model": "gpt-test",
+                        "choices": [{"index": 0, "message": {"role": "assistant", "content": "transport-ok"},
+                                     "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}
+            elif self.path == "/anthropic/v1/messages":
+                body = {"id": "msg-test", "type": "message", "role": "assistant", "model": "claude-test",
+                        "content": [{"type": "text", "text": "transport-ok"}], "stop_reason": "end_turn",
+                        "stop_sequence": None, "usage": {"input_tokens": 1, "output_tokens": 1}}
+            else:
+                self.send_error(404)
+                return
+            data = json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    token = set_hermes_home_override(home)
+    try:
+        home.mkdir(parents=True, exist_ok=True)
+        for mode, suffix, model, expected in (
+            ("chat_completions", "/v1", "gpt-test", "/v1/chat/completions"),
+            ("anthropic_messages", "/anthropic", "claude-test", "/anthropic/v1/messages"),
+            ("anthropic_messages", "/anthropic/v1", "claude-test", "/anthropic/v1/messages"),
+            ("anthropic_messages", "/anthropic/v1/", "claude-test", "/anthropic/v1/messages"),
+        ):
+            config = {"model": {"provider": "custom:transport", "default": model}, "custom_providers": [
+                {"name": "transport", "base_url": f"http://127.0.0.1:{server.server_port}{suffix}",
+                 "api_key": "static-test-key", "api_mode": mode}
+            ]}
+            (home / "config.yaml").write_text(json.dumps(config), encoding="utf-8")
+            vlm = ql.resolve_hermes_vlm_config()
+            script = (
+                "import json,sys; from openviking.models.vlm import VLMFactory; "
+                "v=VLMFactory.create(json.load(sys.stdin)); "
+                "assert v.get_completion(prompt='Reply transport-ok')=='transport-ok'"
+            )
+            count = len(requests)
+            subprocess.run([str(runtime_python), "-c", script], input=json.dumps(vlm),
+                           text=True, check=True, timeout=120)
+            assert requests[count:] == [expected], requests[count:]
+        return requests
+    finally:
+        reset_hermes_home_override(token)
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
 
 
 def main():
@@ -80,6 +150,10 @@ def main():
                 module = importlib.import_module(type(provider).__module__)
                 setup = ql.QuickLocalSetup(health_check=module._validate_openviking_reachability)
                 setup.provision(hermes_home=home)
+                if name == "a":
+                    evidence["llm_request_paths"] = check_llm_transports(
+                        root / "transport-config", ql, server.paths.runtime_python
+                    )
                 provider.initialize("local-smoke-" + name, hermes_home=str(home), platform="cli")
                 assert provider._client is not None
                 provider.sync_turn(

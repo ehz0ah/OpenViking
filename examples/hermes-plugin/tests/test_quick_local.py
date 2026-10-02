@@ -143,6 +143,67 @@ def test_resolve_vlm_maps_anthropic_transport(monkeypatch):
     assert vlm["api_base"] == "https://api.anthropic.com"
 
 
+@pytest.mark.parametrize("suffix", ["/anthropic", "/anthropic/v1", "/anthropic/v1/"])
+def test_resolve_vlm_normalizes_only_anthropic_version_suffix(monkeypatch, suffix):
+    from hermes_cli import config, runtime_provider
+
+    monkeypatch.setattr(config, "load_config", lambda: {
+        "model": {"provider": "custom:gateway", "default": "claude-test"}
+    })
+    runtime = {
+        "provider": "custom", "api_mode": "anthropic_messages",
+        "base_url": "https://gateway.example" + suffix,
+        "api_key": "static-proxy-key", "source": "custom_provider:gateway",
+    }
+    monkeypatch.setattr(runtime_provider, "resolve_runtime_provider", lambda **_: runtime)
+    assert quick_local.resolve_hermes_vlm_config()["api_base"] == "https://gateway.example/anthropic"
+    runtime["api_mode"] = "chat_completions"
+    assert quick_local.resolve_hermes_vlm_config()["api_base"] == runtime["base_url"]
+
+
+@pytest.mark.parametrize("credential", ["eyJ-test-only", "cc-test-only", "sk-ant-oat01-test", "sk-ant-setup-test"])
+@pytest.mark.parametrize("declared", [False, True])
+def test_real_resolver_rejects_native_anthropic_oauth_before_declared_key(
+    external_provider, credential, declared
+):
+    from agent.secret_scope import build_profile_secret_scope, reset_secret_scope, set_secret_scope
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    home, _, _, _ = external_provider("oauth-source")
+    model = {"provider": "anthropic", "default": "claude-test"}
+    if declared:
+        model["key_env"] = "ANTHROPIC_TOKEN"
+    (home / "config.yaml").write_text(json.dumps({"model": model}))
+    (home / ".env").write_text("ANTHROPIC_TOKEN=" + credential + "\n")
+    home_token = set_hermes_home_override(home)
+    secret_token = set_secret_scope(build_profile_secret_scope(home), profile_home=str(home))
+    try:
+        with pytest.raises(quick_local.QuickLocalSetupError, match="cannot be copied safely"):
+            quick_local.resolve_hermes_vlm_config()
+    finally:
+        reset_secret_scope(secret_token)
+        reset_hermes_home_override(home_token)
+
+
+@pytest.mark.parametrize("base", ["https://api.anthropic.com/v1", "https://proxy.example/anthropic/v1"])
+@pytest.mark.parametrize("credential", ["eyJ-test-only", "cc-test-only", "sk-ant-api03-static-test"])
+def test_anthropic_credentials_follow_route_identity_before_declared_key(monkeypatch, base, credential):
+    from hermes_cli import config, runtime_provider
+
+    monkeypatch.setattr(config, "load_config", lambda: {
+        "model": {"provider": "custom:proxy", "default": "claude-test", "key_env": "PROXY_KEY"}
+    })
+    monkeypatch.setattr(runtime_provider, "resolve_runtime_provider", lambda **_: {
+        "provider": "custom", "api_mode": "anthropic_messages", "base_url": base,
+        "api_key": credential, "source": "env:PROXY_KEY",
+    })
+    if "api.anthropic.com" in base and not credential.startswith("sk-ant-api"):
+        with pytest.raises(quick_local.QuickLocalSetupError, match="cannot be copied safely"):
+            quick_local.resolve_hermes_vlm_config()
+    else:
+        assert quick_local.resolve_hermes_vlm_config()["api_key"] == credential
+
+
 def test_resolve_vlm_accepts_declared_model_key_env(monkeypatch):
     from hermes_cli import auth, config, runtime_provider
     saved = {"model": {"provider": "lmstudio", "default": "local-model", "key_env": "TEST_LLM_KEY"}}
