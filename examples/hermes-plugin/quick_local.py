@@ -413,12 +413,10 @@ class QuickLocalSetup:
             server_config=server_config,
         )
 
-        if not clear_server_restart_required(preflight.paths.server_config):
-            raise QuickLocalSetupError("Could not clear Quick Local's stale restart marker.")
-        _prepare_private_directory(preflight.paths.root)
+        from .local_server import LocalServer
+
         preflight.paths.workspace.mkdir(parents=True, exist_ok=True)
-        atomic_json_write(preflight.paths.server_config, server_config, mode=0o600)
-        _write_ovcli_profile(preflight.paths.ovcli_config, endpoint, server_config)
+        LocalServer(hermes_home).configure(server_config, runtime_changed=runtime_changed)
         endpoint = self._start_managed_server(preflight.paths, endpoint)
         self._emit(
             QuickLocalStage.WRITE_CONFIG,
@@ -534,6 +532,7 @@ class QuickLocalSetup:
                 f"Preparing {EMBEDDING_MODEL}; its {_MODEL_DOWNLOAD_SIZE} model "
                 "is downloaded once if needed...",
             )
+            _validate_local_embedding(paths)
             self._emit(
                 QuickLocalStage.VALIDATE,
                 "Validating OpenViking with a temporary local server...",
@@ -621,6 +620,45 @@ def openviking_install_satisfies_requirement(paths: QuickLocalPaths) -> bool:
     except (InvalidVersion, OSError, subprocess.SubprocessError):
         return False
     return version in _OPENVIKING_VERSION_SPECIFIER
+
+
+def _validate_local_embedding(paths: QuickLocalPaths) -> None:
+    """Health can pass with failed embeddings; exercise the native backend."""
+    script = (
+        "import math; "
+        "from openviking.models.embedder.local_embedders import LocalDenseEmbedder; "
+        f"e=LocalDenseEmbedder(model_name={EMBEDDING_MODEL!r},cache_dir={str(paths.model_cache)!r}); "
+        "v=e.embed('memory setup validation').dense_vector; "
+        f"assert len(v)=={EMBEDDING_DIMENSION} and all(math.isfinite(x) for x in v) and any(v)"
+    )
+    log_path = _server_log_path(paths.root.parent)
+    _prepare_private_directory(log_path.parent)
+    if log_path.is_symlink():
+        raise QuickLocalSetupError("Quick Local log must belong to this profile.")
+    if not log_path.exists():
+        log_path.touch(mode=0o600)
+    if os.name != "nt":
+        log_path.chmod(0o600)
+    try:
+        with log_path.open("ab") as log:
+            result = subprocess.run(
+                [str(paths.runtime_python), "-c", script],
+                env=_private_child_env(paths.root.parent),
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                check=False,
+                timeout=_HEALTH_TIMEOUT_SECONDS,
+            )
+        if result.returncode:
+            raise QuickLocalSetupError(
+                "Quick Local's embedding model could not run. "
+                f"Review {log_path}; use Custom setup with a separate server if needed."
+            )
+    except subprocess.TimeoutExpired as exc:
+        raise QuickLocalSetupError(
+            f"Quick Local's embedding check timed out. Review {log_path} and retry setup."
+        ) from exc
 
 
 def find_available_port(

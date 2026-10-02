@@ -33,8 +33,8 @@ _PACKAGES = {
     ("Windows", "x86_64"): (
         "3f/26/e0d259f1a9fb53d02b99487f232265f79965fefb9b956563612c7acf5ae5/openviking-0.4.22-cp310-abi3-win_amd64.whl",
         "cad1f3e4ea843c47178a8d5056df733b1e3f49d4e902b6f803b9e192320bb89b",
-        "v0.3.30/llama_cpp_python-0.3.30-py3-none-win_amd64.whl",
-        "8f238e24ed335ad05acf48648d0855714dfeb0ed341d1ff15d8b8cc06bd51d6a",
+        "v0.3.36/llama_cpp_python-0.3.36-py3-none-win_amd64.whl",
+        "ae5e88a2cf464e5a2dde7c8898c2d5c71cc24d03cac6396bf7509456bde0b9fb",
     ),
 }
 

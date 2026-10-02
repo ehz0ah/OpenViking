@@ -142,6 +142,7 @@ jobs:
         run: |
           uv run --no-sync python -m pytest \
             "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_local_lifecycle.py" \
+            "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_quick_local.py" \
             --confcutdir="$GITHUB_WORKSPACE/examples/hermes-plugin/tests" -p no:cacheprovider -q
       - name: Install and run real Quick Local services
         run: |

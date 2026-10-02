@@ -234,6 +234,34 @@ def test_cold_import_timeout_does_not_trigger_reinstallation(modules, monkeypatc
     install.assert_not_called()
 
 
+@pytest.mark.parametrize("failure", [1, subprocess.TimeoutExpired("embedding", 660)])
+def test_failed_native_embedding_does_not_activate_setup(modules, monkeypatch, failure):
+    home, _p, _m, ql, _life, _packages = modules
+    monkeypatch.setattr(ql, "_pm_available", lambda: False)
+    monkeypatch.setattr(ql, "_private_child_env", lambda target: {"HERMES_HOME": str(target)})
+    run = MagicMock()
+    if isinstance(failure, Exception):
+        run.side_effect = failure
+    else:
+        run.return_value.returncode = failure
+    monkeypatch.setattr(ql.subprocess, "run", run)
+    start = MagicMock()
+    monkeypatch.setattr(ql, "_start_validation_server", start)
+    paths = ql.managed_paths(home)
+    engine = ql.QuickLocalSetup(health_check=lambda _url: (True, ""))
+    with pytest.raises(ql.QuickLocalSetupError, match="embedding"):
+        engine._validate_generated_config(
+            paths=paths,
+            endpoint="http://127.0.0.1:1933",
+            server_config=ql.build_server_config(paths, {"model": "test"}),
+        )
+    start.assert_not_called()
+    assert not paths.server_config.exists() and not paths.ovcli_config.exists()
+    assert run.call_args.kwargs["timeout"] == ql._HEALTH_TIMEOUT_SECONDS
+    assert run.call_args.kwargs["env"]["HERMES_HOME"] == str(home)
+    assert "math.isfinite" in run.call_args.args[0][-1]
+
+
 def test_platform_without_reviewed_binary_requires_explicit_consent(modules, monkeypatch):
     _home, _p, _m, ql, _life, packages = modules
     monkeypatch.setattr(packages.platform, "system", lambda: "Darwin")

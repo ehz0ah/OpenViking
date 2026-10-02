@@ -23,6 +23,7 @@ def plugin_modules(external_provider, monkeypatch):
     quick_local = importlib.import_module(openviking_module.__name__ + ".quick_local")
     setup_flow = importlib.import_module(openviking_module.__name__ + "._setup")
     monkeypatch.setattr(quick_local.secrets, "token_urlsafe", lambda _size: "local-test-key")
+    monkeypatch.setattr(quick_local, "_validate_local_embedding", MagicMock())
 
 
 def _preflight(tmp_path: Path) -> quick_local.QuickLocalPreflight:
@@ -546,12 +547,27 @@ def test_fresh_provision_validates_before_writing_active_config(tmp_path, monkey
             "api_base": "https://llm.example/v1",
         },
     )
-    ready = MagicMock(return_value="http://127.0.0.1:1937")
+    def mark_ready(paths, endpoint):
+        assert paths.restart_required_marker.is_file()
+        quick_local.clear_server_restart_required(paths.server_config)
+        return endpoint
+
+    ready = MagicMock(side_effect=mark_ready)
     monkeypatch.setattr(setup, "_start_managed_server", ready)
     monkeypatch.setattr(setup, "_ensure_openviking_installed", lambda _paths: True)
     monkeypatch.setattr(quick_local, "find_available_port", lambda **_kwargs: 1937)
     paths = quick_local.managed_paths(tmp_path)
     paths.root.mkdir(parents=True)
+    lifecycle = importlib.import_module(quick_local.__package__ + ".local_server")
+    write_profile = quick_local._write_ovcli_profile
+
+    def write_under_lock(*args):
+        with pytest.raises(quick_local.QuickLocalSetupError, match="busy"):
+            with lifecycle.LocalServer(tmp_path).locked(timeout=0):
+                pass
+        return write_profile(*args)
+
+    monkeypatch.setattr(quick_local, "_write_ovcli_profile", write_under_lock)
     quick_local.atomic_json_write(
         paths.restart_required_marker,
         {"restart_required": True},
@@ -609,6 +625,24 @@ def test_fresh_provision_validates_before_writing_active_config(tmp_path, monkey
         quick_local.QuickLocalStage.WRITE_CONFIG,
         quick_local.QuickLocalStage.COMPLETE,
     ]
+
+
+def test_fresh_provision_failed_start_keeps_restart_marker(tmp_path, monkeypatch):
+    setup = quick_local.QuickLocalSetup(health_check=lambda _endpoint: (False, ""))
+    monkeypatch.setattr(quick_local, "resolve_hermes_vlm_config", lambda: {"model": "test"})
+    monkeypatch.setattr(quick_local, "find_available_port", lambda **_kwargs: 1937)
+    monkeypatch.setattr(setup, "_ensure_openviking_installed", lambda _paths: True)
+    monkeypatch.setattr(setup, "_validate_generated_config", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        setup,
+        "_start_managed_server",
+        MagicMock(side_effect=quick_local.QuickLocalSetupError("startup failed")),
+    )
+    with pytest.raises(quick_local.QuickLocalSetupError, match="startup failed"):
+        setup.provision(hermes_home=tmp_path, preflight=_preflight(tmp_path))
+    paths = quick_local.managed_paths(tmp_path)
+    assert paths.restart_required_marker.is_file()
+    assert quick_local.connection_config({}, tmp_path)["url"] == "http://127.0.0.1:1937"
 
 
 def test_failed_validation_stops_child_and_leaves_profile_inactive(tmp_path, monkeypatch):
