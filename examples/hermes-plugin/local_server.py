@@ -41,6 +41,32 @@ class _RecordedProcess:
             return -1
 
 
+def stop_process_tree(process, *, timeout=5):
+    """Stop an owned parent and its existing children, including Windows launchers."""
+    from .quick_local import QuickLocalSetupError
+
+    try:
+        processes = [*process.children(recursive=True), process]
+        for child in processes:
+            try:
+                child.terminate()
+            except psutil.NoSuchProcess:
+                pass
+        _gone, alive = psutil.wait_procs(processes, timeout=timeout)
+        for child in alive:
+            try:
+                child.kill()
+            except psutil.NoSuchProcess:
+                pass
+        _gone, alive = psutil.wait_procs(alive, timeout=timeout)
+        if alive:
+            raise QuickLocalSetupError(
+                "Quick Local could not stop its server. Review the server log."
+            )
+    except psutil.NoSuchProcess:
+        pass
+
+
 class LocalServer:
     """Never stop a process unless its identity and profile config match."""
 
@@ -170,24 +196,7 @@ class LocalServer:
         return None
 
     def _stop(self, process):
-        try:
-            children = process.children(recursive=True)
-            processes = [*children, process]
-            for child in processes:
-                try:
-                    child.terminate()
-                except psutil.NoSuchProcess:
-                    pass
-            _gone, alive = psutil.wait_procs(processes, timeout=5)
-            for child in alive:
-                child.kill()
-            _gone, alive = psutil.wait_procs(alive, timeout=5)
-            if alive:
-                raise self.ql.QuickLocalSetupError(
-                    "Quick Local could not stop its server. Review the server log."
-                )
-        except psutil.NoSuchProcess:
-            pass
+        stop_process_tree(process)
 
     def configure(self, config, *, runtime_changed=False):
         with self.locked():

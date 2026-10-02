@@ -924,19 +924,18 @@ def _wait_for_health(
 
 
 def _stop_process(process: subprocess.Popen) -> bool:
+    import psutil
+
+    from .local_server import stop_process_tree
+
     try:
         if process.poll() is not None:
             return True
-        process.terminate()
+        stop_process_tree(psutil.Process(process.pid), timeout=_PROCESS_STOP_TIMEOUT_SECONDS)
         process.wait(timeout=_PROCESS_STOP_TIMEOUT_SECONDS)
         return True
-    except subprocess.TimeoutExpired:
-        pass
-    except Exception:
-        return False
-    try:
-        process.kill()
-        process.wait(timeout=_PROCESS_STOP_TIMEOUT_SECONDS)
+    except psutil.NoSuchProcess:
+        # The child can finish between poll() and taking its process handle.
         return True
     except Exception:
         return False

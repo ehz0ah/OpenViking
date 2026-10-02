@@ -781,15 +781,25 @@ def test_preferred_configured_port_is_reused_when_available(monkeypatch):
     assert bound == [("127.0.0.1", 1940)]
 
 
-def test_validation_stop_force_kills_only_after_graceful_timeout():
+def test_validation_stop_force_kills_only_after_graceful_timeout(monkeypatch):
+    import psutil
+
     process = MagicMock()
     process.poll.return_value = None
-    process.wait.side_effect = [subprocess.TimeoutExpired("server", 10), 0]
+    root, child = MagicMock(), MagicMock()
+    root.children.return_value = [child]
+    monkeypatch.setattr(psutil, "Process", lambda _pid: root)
+    wait = MagicMock(side_effect=[([child], [root]), ([root], [])])
+    monkeypatch.setattr(psutil, "wait_procs", wait)
 
     assert quick_local._stop_process(process) is True
 
-    process.terminate.assert_called_once_with()
-    process.kill.assert_called_once_with()
+    root.terminate.assert_called_once_with()
+    child.terminate.assert_called_once_with()
+    root.kill.assert_called_once_with()
+    child.kill.assert_not_called()
+    assert wait.call_args_list[0].args[0] == [child, root]
+    process.wait.assert_called_once_with(timeout=quick_local._PROCESS_STOP_TIMEOUT_SECONDS)
 
 
 def test_health_wait_budget_covers_openviking_model_download():

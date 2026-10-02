@@ -60,11 +60,15 @@ def servers(modules, monkeypatch):
         command = server.paths.server_command
         command.parent.mkdir(parents=True)
         command.write_text(
-            """import argparse,json,os,time
+            """import argparse,json,os,subprocess,sys,time
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler,HTTPServer
 p=argparse.ArgumentParser();p.add_argument('--config');p.add_argument('--host');p.add_argument('--port',type=int);a=p.parse_args()
 c=json.load(open(a.config));key=c['server']['root_api_key']
 if c['vlm'].get('crash'):time.sleep(.2);raise SystemExit(9)
+if c['vlm'].get('child'):
+ child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(120)'])
+ Path(a.config+'.child').write_text(str(child.pid))
 class Handler(BaseHTTPRequestHandler):
  def log_message(self,*args):pass
  def do_GET(self):
@@ -173,6 +177,21 @@ def test_early_server_exit_fails_promptly_and_clears_process_record(servers):
         a.wait_ready(started, health, timeout=600)
     health.assert_not_called()
     assert not a.record_path.exists()
+
+
+def test_temporary_validation_stop_also_stops_launcher_child(servers):
+    import psutil
+
+    a = servers("a")
+    config = a._config()
+    config["vlm"]["child"] = True
+    a.configure(config)
+    started = ready(a)
+    child = psutil.Process(int(a.paths.server_config.with_name("ov.conf.child").read_text()))
+    assert child.is_running()
+    assert a.ql._stop_process(started.process)
+    assert started.process.poll() is not None
+    assert not child.is_running() or child.status() == psutil.STATUS_ZOMBIE
 
 
 def test_restore_repairs_private_modes_without_touching_external_paths(modules, tmp_path):
