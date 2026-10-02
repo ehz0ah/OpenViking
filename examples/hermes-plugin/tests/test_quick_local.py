@@ -497,6 +497,8 @@ def test_validation_server_rechecks_selected_port_before_start(tmp_path, monkeyp
 
 def test_reuse_rechecks_runtime_and_refreshes_saved_vlm(tmp_path, monkeypatch):
     monkeypatch.setattr(quick_local, "server_belongs_to_profile", lambda *_args: True)
+    lifecycle = importlib.import_module(quick_local.__package__ + ".local_server")
+    monkeypatch.setattr(lifecycle.LocalServer, "_verified_process", lambda *_args: object())
     paths = quick_local.managed_paths(tmp_path)
     paths.root.mkdir(parents=True)
     old_vlm = {
@@ -510,10 +512,8 @@ def test_reuse_rechecks_runtime_and_refreshes_saved_vlm(tmp_path, monkeypatch):
         quick_local.build_server_config(paths, old_vlm, port=1938),
         mode=0o600,
     )
-    quick_local.atomic_json_write(
-        paths.ovcli_config,
-        {"url": "http://127.0.0.1:1938", "actor_peer_id": "hermes"},
-        mode=0o600,
+    quick_local._write_ovcli_profile(
+        paths.ovcli_config, "http://127.0.0.1:1938", json.loads(paths.server_config.read_text())
     )
     new_vlm = {
         "provider": "openai",
@@ -531,9 +531,11 @@ def test_reuse_rechecks_runtime_and_refreshes_saved_vlm(tmp_path, monkeypatch):
     monkeypatch.setattr(quick_local, "find_available_port", lambda **_kwargs: 1940)
     validate = MagicMock()
     monkeypatch.setattr(setup, "_validate_generated_config", validate)
+
     def restart(paths, endpoint):
         quick_local.clear_server_restart_required(paths.server_config)
         return endpoint
+
     restart = MagicMock(side_effect=restart)
     monkeypatch.setattr(setup, "_start_managed_server", restart)
 
@@ -554,6 +556,8 @@ def test_reuse_rechecks_runtime_and_refreshes_saved_vlm(tmp_path, monkeypatch):
 def test_failed_restart_is_retried_on_next_setup(tmp_path, monkeypatch):
     monkeypatch.setattr(quick_local, "find_available_port", lambda **_kwargs: 1940)
     monkeypatch.setattr(quick_local, "server_belongs_to_profile", lambda *_args: True)
+    lifecycle = importlib.import_module(quick_local.__package__ + ".local_server")
+    monkeypatch.setattr(lifecycle.LocalServer, "_verified_process", lambda *_args: object())
     paths = quick_local.managed_paths(tmp_path)
     paths.root.mkdir(parents=True)
     old_vlm = {
@@ -568,10 +572,8 @@ def test_failed_restart_is_retried_on_next_setup(tmp_path, monkeypatch):
         quick_local.build_server_config(paths, old_vlm, port=1938),
         mode=0o600,
     )
-    quick_local.atomic_json_write(
-        paths.ovcli_config,
-        {"url": "http://127.0.0.1:1938", "actor_peer_id": "hermes"},
-        mode=0o600,
+    quick_local._write_ovcli_profile(
+        paths.ovcli_config, "http://127.0.0.1:1938", json.loads(paths.server_config.read_text())
     )
     monkeypatch.setattr(quick_local, "resolve_hermes_vlm_config", lambda: new_vlm)
 
@@ -579,8 +581,11 @@ def test_failed_restart_is_retried_on_next_setup(tmp_path, monkeypatch):
         setup = quick_local.QuickLocalSetup(health_check=lambda _endpoint: (True, ""))
         monkeypatch.setattr(setup, "_ensure_openviking_installed", lambda _paths: False)
         monkeypatch.setattr(setup, "_validate_generated_config", lambda **_kwargs: None)
-        monkeypatch.setattr(setup, "_start_managed_server",
-                            MagicMock(side_effect=quick_local.QuickLocalSetupError("restart failed")))
+        monkeypatch.setattr(
+            setup,
+            "_start_managed_server",
+            MagicMock(side_effect=quick_local.QuickLocalSetupError("restart failed")),
+        )
         return setup.provision(hermes_home=tmp_path)
 
     with pytest.raises(quick_local.QuickLocalSetupError, match="restart failed"):
@@ -608,6 +613,7 @@ def test_fresh_provision_validates_before_writing_active_config(tmp_path, monkey
             "api_base": "https://llm.example/v1",
         },
     )
+
     def mark_ready(paths, endpoint):
         assert paths.restart_required_marker.is_file()
         quick_local.clear_server_restart_required(paths.server_config)
@@ -942,6 +948,10 @@ def test_current_installer_uses_pm_and_private_root(tmp_path, monkeypatch):
     satisfies = MagicMock(side_effect=[False, True])
     monkeypatch.setattr(quick_local, "openviking_install_satisfies_requirement", satisfies)
     paths = quick_local.managed_paths(tmp_path)
+    packages = importlib.import_module(quick_local.__package__ + ".local_packages")
+    monkeypatch.setattr(
+        packages, "verified_requirements", lambda requirements, _cache: requirements
+    )
     engine = quick_local.QuickLocalSetup(health_check=lambda _url: (False, ""))
     assert engine._ensure_openviking_installed(paths)
     install.assert_called_once_with(
@@ -962,6 +972,10 @@ def test_pm_failure_does_not_activate_profile(tmp_path, monkeypatch):
     monkeypatch.setattr(
         quick_local, "openviking_install_satisfies_requirement", lambda _paths: False
     )
+    packages = importlib.import_module(quick_local.__package__ + ".local_packages")
+    monkeypatch.setattr(
+        packages, "verified_requirements", lambda requirements, _cache: requirements
+    )
     engine = quick_local.QuickLocalSetup(health_check=lambda _url: (False, ""))
     with pytest.raises(quick_local.QuickLocalSetupError, match="private OpenViking runtime"):
         engine._ensure_openviking_installed(quick_local.managed_paths(tmp_path))
@@ -974,6 +988,12 @@ def test_compatible_runtime_avoids_installer(tmp_path, monkeypatch):
     )
     run = MagicMock()
     monkeypatch.setattr(quick_local.subprocess, "run", run)
+    packages = importlib.import_module(quick_local.__package__ + ".local_packages")
+    paths = quick_local.managed_paths(tmp_path)
+    paths.root.mkdir()
+    (paths.root / "runtime-requirements.json").write_text(
+        json.dumps(packages.install_requirements())
+    )
     engine = quick_local.QuickLocalSetup(health_check=lambda _url: (False, ""))
     assert engine._ensure_openviking_installed(quick_local.managed_paths(tmp_path)) is False
     run.assert_not_called()

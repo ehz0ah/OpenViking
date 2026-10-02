@@ -287,6 +287,7 @@ def _prompt_manual_connection_values(prompt, select, cancelled, *, service: bool
 
 def _link_ovcli_profile(*, config: dict, provider_config: dict, env_path: Path, ovcli_path: Path) -> None:
     ov = _ov()
+    _stop_previous_quick_local(provider_config, env_path.parent, ovcli_path=ovcli_path)
     quick_local.clear_managed_settings(provider_config)
     for key in ("endpoint", "api_key", "root_api_key", "account", "user", "agent", "api_key_type"):
         provider_config.pop(key, None)
@@ -305,6 +306,7 @@ def _link_ovcli_profile(*, config: dict, provider_config: dict, env_path: Path, 
 
 def _save_hermes_only_config(*, config: dict, provider_config: dict, env_path: Path, values: dict) -> None:
     ov = _ov()
+    _stop_previous_quick_local(provider_config, env_path.parent)
     quick_local.clear_managed_settings(provider_config)
     provider_config["use_ovcli_config"] = False
     provider_config.pop("ovcli_config_path", None)
@@ -320,6 +322,21 @@ def _save_hermes_only_config(*, config: dict, provider_config: dict, env_path: P
     os.environ.update(writes)
     for key in set(ov._OPENVIKING_ENV_KEYS) - set(writes):
         os.environ.pop(key, None)
+
+
+def _stop_previous_quick_local(provider_config: dict, home: Path, *, ovcli_path=None) -> None:
+    if provider_config.get("deployment") != quick_local.DEPLOYMENT:
+        return
+    from .local_server import LocalServer
+
+    server = LocalServer(home)
+    if ovcli_path is not None and quick_local._paths_equivalent(ovcli_path, server.paths.ovcli_config):
+        return  # Quick Local setup is relinking its own config.
+    try:
+        if server.paths.server_config.is_file() and server.stop():
+            _say("Stopped this profile's Quick Local server. Its data is retained.")
+    except (quick_local.QuickLocalSetupError, OSError):
+        _say("The previous Quick Local server could not be stopped safely. Check it before removing the plugin.")
 
 
 def _profile_display_name(profile) -> str:

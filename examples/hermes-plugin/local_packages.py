@@ -1,10 +1,17 @@
-"""Reviewed binary packages for Quick Local. Hashes are enforced by uv/PM."""
+"""Reviewed binary packages, verified before either installer receives them."""
 
 from __future__ import annotations
 
+import hashlib
+import os
 import platform
 import sys
+import tempfile
+from pathlib import Path
+from urllib.parse import parse_qs, urldefrag, urlparse
 
+import httpx
+from packaging.requirements import Requirement
 from packaging.version import Version
 
 _OV = "https://files.pythonhosted.org/packages/"
@@ -71,3 +78,55 @@ def install_requirements(*, allow_source_build=False):
     # The PM resolver otherwise chooses a LiteLLM release that excludes Python
     # 3.14. This constraint belongs only to OpenViking's private environment.
     return [*requirements, 'litellm==1.83.7; python_version >= "3.14"']
+
+
+def verified_requirements(requirements: list[str], cache: Path) -> list[str]:
+    """Give installers local wheels whose bytes match the reviewed pins.
+
+    PM's project resolver does not enforce hashes in URL fragments. Checking
+    before installation also protects the pre-PM path and cache reuse.
+    """
+    from .quick_local import QuickLocalSetupError, _prepare_private_directory
+
+    verified = []
+    for value in requirements:
+        requirement = Requirement(value)
+        if not requirement.url:
+            verified.append(value)
+            continue
+        url, fragment = urldefrag(requirement.url)
+        digest = parse_qs(fragment).get("sha256", [""])[0]
+        if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+            raise QuickLocalSetupError("Quick Local's native package needs a reviewed SHA-256 pin.")
+        _prepare_private_directory(cache)
+        directory = cache / digest
+        _prepare_private_directory(directory)
+        wheel = directory / Path(urlparse(url).path).name
+        if not wheel.name.endswith(".whl") or wheel.is_symlink():
+            raise QuickLocalSetupError("Quick Local's native package must be a private wheel file.")
+        if not wheel.is_file() or _sha256(wheel) != digest:
+            fd, temporary = tempfile.mkstemp(dir=directory, suffix=".download")
+            try:
+                checksum = hashlib.sha256()
+                with os.fdopen(fd, "wb") as output:
+                    with httpx.stream("GET", url, follow_redirects=True, timeout=60) as response:
+                        response.raise_for_status()
+                        for chunk in response.iter_bytes(1024 * 1024):
+                            checksum.update(chunk)
+                            output.write(chunk)
+                if checksum.hexdigest() != digest:
+                    raise QuickLocalSetupError(
+                        "Quick Local's native package failed SHA-256 verification. Installation was cancelled."
+                    )
+                os.replace(temporary, wheel)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+        extras = f"[{','.join(sorted(requirement.extras))}]" if requirement.extras else ""
+        marker = f" ; {requirement.marker}" if requirement.marker else ""
+        verified.append(f"{requirement.name}{extras} @ {wheel.absolute().as_uri()}{marker}")
+    return verified
+
+
+def _sha256(path: Path) -> str:
+    with path.open("rb") as file:
+        return hashlib.file_digest(file, "sha256").hexdigest()

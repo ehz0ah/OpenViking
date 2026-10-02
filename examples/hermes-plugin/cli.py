@@ -10,6 +10,9 @@ def _run(args):
     from .quick_local import QuickLocalSetupError, _server_accepts_config
 
     server = LocalServer(Path(get_hermes_home()))
+    if not server.paths.server_config.is_file():
+        print("Quick Local is not configured for this profile.")
+        return
     try:
         if args.local_action == "stop":
             print("Quick Local stopped." if server.stop() else "Quick Local is already stopped.")

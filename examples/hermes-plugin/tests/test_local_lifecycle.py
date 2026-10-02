@@ -74,7 +74,7 @@ class Handler(BaseHTTPRequestHandler):
  def do_GET(self):
   ok=self.path=='/health' or self.headers.get('X-API-Key')==key
   self.send_response(200 if ok else 401);self.end_headers()
-  self.wfile.write(json.dumps({'status':'ok','auth_mode':'trusted','root_api_key_required':True}).encode())
+  self.wfile.write(json.dumps({'status':'ok','healthy':True,'version':'0.4.22','auth_mode':'trusted','root_api_key_required':True}).encode())
 # Match asyncio/Uvicorn: Windows listeners do not share an active address.
 HTTPServer.allow_reuse_address = os.name != 'nt'
 HTTPServer((a.host,a.port),Handler).serve_forever()
@@ -335,7 +335,9 @@ def test_legacy_installer_uses_profile_child_environment(modules, monkeypatch, s
     else:
         monkeypatch.delattr(subprocess_env, "served_profile_child_env", raising=False)
         monkeypatch.setattr(subprocess_env, "hermes_subprocess_env", child_env)
-    monkeypatch.setattr(managed_uv, "ensure_uv", lambda: "uv")
+    monkeypatch.setattr(managed_uv, "resolve_uv", lambda: "uv")
+    repair = MagicMock(side_effect=AssertionError("must not repair the Hermes runtime"))
+    monkeypatch.setattr(managed_uv, "ensure_uv", repair)
     run = MagicMock(return_value=MagicMock(returncode=0))
     monkeypatch.setattr(ql.subprocess, "run", run)
     engine = ql.QuickLocalSetup(health_check=lambda _url: (False, ""))
@@ -439,3 +441,168 @@ def test_supported_binary_requirements_pin_both_archives_by_hash(
     requirements = packages.install_requirements()
     assert all("#sha256=" in requirement for requirement in requirements[:2])
     assert "metal" in requirements[1] if system == "Darwin" else "metal" not in requirements[1]
+
+
+@pytest.mark.parametrize("action", ["kill", "stop"])
+def test_live_provider_recovers_a_stopped_server_in_the_same_session(servers, modules, action):
+    import time
+
+    import psutil
+
+    _home, provider, _module, ql, _life, _packages = modules
+    server = servers("live-provider")
+    ready(server)
+    callbacks = []
+    provider._profile_config_and_env = lambda: ({"deployment": ql.DEPLOYMENT}, {})
+    provider.initialize(
+        "retained-session",
+        hermes_home=str(server.paths.root.parent),
+        platform="cli",
+        status_callback=callbacks.append,
+        warning_callback=callbacks.append,
+    )
+    old_client = provider._ensure_client()
+    old_pid = server.status()["pid"]
+    assert old_client is not None
+    if action == "kill":
+        psutil.Process(old_pid).kill()
+    else:
+        server.stop()
+    assert provider._ensure_client() is None
+    deadline = time.monotonic() + 20
+    while provider._ensure_client() is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert provider._client is not None and provider._client is not old_client
+    assert server.status()["pid"] != old_pid
+    assert any("Starting Quick Local" in message for message in callbacks)
+
+
+def test_configure_refuses_unverifiable_server_before_changing_live_files(servers, monkeypatch):
+    server = servers("unverified")
+    ready(server)
+    before = {
+        path: path.read_bytes() for path in (server.paths.server_config, server.paths.ovcli_config)
+    }
+    monkeypatch.setattr(server, "_verified_process", lambda _record: None)
+    monkeypatch.setattr(server, "_adopt", lambda *_args: None)
+    config = server._config()
+    config["server"]["root_api_key"] = "rotated-test-key"
+    with pytest.raises(server.ql.QuickLocalSetupError, match="cannot verify"):
+        server.configure(config)
+    assert all(path.read_bytes() == value for path, value in before.items())
+    assert not server.paths.restart_required_marker.exists()
+    assert server.ql.server_belongs_to_profile(server.paths, server.status()["endpoint"])
+
+
+def test_configure_adopts_a_lost_record_before_changing_the_key(servers):
+    server = servers("lost-record")
+    ready(server)
+    old_pid = server.status()["pid"]
+    server.record_path.unlink()
+    config = server._config()
+    config["server"]["root_api_key"] = "rotated-test-key"
+    server.configure(config)
+    assert server._read_record()["pid"] == old_pid
+    ready(server)
+    assert server.status()["pid"] != old_pid
+    assert server.ql.server_belongs_to_profile(server.paths, server.status()["endpoint"])
+
+
+def test_new_managed_ports_leave_the_openviking_default_free(modules, monkeypatch):
+    _home, _p, _m, ql, _life, _packages = modules
+    monkeypatch.setattr(ql, "_can_bind_local_port", lambda *_args: True)
+    assert ql.find_available_port() == 1934
+    # Existing Quick Local profiles retain their original port.
+    assert ql.find_available_port(preferred_endpoint="http://127.0.0.1:1933") == 1933
+
+
+def test_retained_provider_recovers_a_port_taken_by_another_profile(servers, modules):
+    import time
+
+    _h, provider, _module, ql, _life, _packages = modules
+    a, b = servers("retained-a"), servers("retained-b")
+    ready(a)
+    old_endpoint = a.status()["endpoint"]
+    provider._profile_config_and_env = lambda: ({"deployment": ql.DEPLOYMENT}, {})
+    provider.initialize("retained-port", hermes_home=str(a.paths.root.parent), platform="cli")
+    assert provider._ensure_client() is not None
+    a.stop()
+    config = b._config()
+    config["server"]["port"] = ql._endpoint_port(old_endpoint)
+    b.configure(config)
+    ready(b)
+    foreign_pid = b.status()["pid"]
+    assert provider._ensure_client() is None
+    deadline = time.monotonic() + 20
+    while provider._ensure_client() is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert provider._client is not None
+    assert provider._endpoint != old_endpoint
+    assert provider._endpoint == ql.connection_config({}, a.paths.root.parent)["url"]
+    assert b.status()["pid"] == foreign_pid
+
+
+def test_switching_away_stops_only_the_previous_managed_server(servers, modules, capsys):
+    _h, _p, _m, ql, _life, _packages = modules
+    setup = importlib.import_module(ql.__package__ + "._setup")
+    a, b = servers("switch-a"), servers("switch-b")
+    ready(a)
+    ready(b)
+    b_pid = b.status()["pid"]
+    config = {"memory": {}}
+    provider_config = {"deployment": ql.DEPLOYMENT}
+    a.paths.workspace.mkdir()
+    marker = a.paths.workspace / "retained-memory"
+    marker.write_text("keep")
+    setup._save_hermes_only_config(
+        config=config,
+        provider_config=provider_config,
+        env_path=a.paths.root.parent / ".env",
+        values={"endpoint": "https://custom.example", "api_key": "synthetic-key"},
+    )
+    assert a.status()["state"] == "stopped"
+    assert b.status()["pid"] == b_pid
+    assert marker.read_text() == "keep"
+    assert "data is retained" in capsys.readouterr().out
+
+
+def test_unconfigured_status_does_not_create_managed_storage(modules, monkeypatch, capsys):
+    from argparse import Namespace
+
+    home, _p, _m, ql, _life, _packages = modules
+    cli = importlib.import_module(ql.__package__ + ".cli")
+    monkeypatch.setattr(cli, "get_hermes_home", lambda: home)
+    cli._run(Namespace(local_action="status"))
+    assert "not configured" in capsys.readouterr().out
+    assert not ql.managed_paths(home).root.exists()
+
+
+def test_changed_native_pins_reinstall_an_existing_runtime(modules, monkeypatch):
+    home, _p, _m, ql, _life, packages = modules
+    paths = ql.managed_paths(home)
+    paths.root.mkdir()
+    (paths.root / "runtime-requirements.json").write_text('["older-pins"]')
+    monkeypatch.setattr(ql, "openviking_install_satisfies_requirement", lambda _paths: True)
+    monkeypatch.setattr(ql, "_pm_available", lambda: False)
+    monkeypatch.setattr(packages, "verified_requirements", lambda values, _cache: values)
+    engine = ql.QuickLocalSetup(health_check=lambda _url: (False, ""))
+    install = MagicMock()
+    monkeypatch.setattr(engine, "_install_with_uv", install)
+    assert engine._ensure_openviking_installed(paths)
+    install.assert_called_once_with(paths, packages.install_requirements())
+    assert not engine._ensure_openviking_installed(paths)
+    assert install.call_count == 1
+
+
+def test_legacy_install_without_uv_fails_without_repairing_hermes(modules, monkeypatch):
+    from hermes_cli import managed_uv
+
+    home, _p, _m, ql, _life, _packages = modules
+    monkeypatch.setattr(managed_uv, "resolve_uv", lambda: None)
+    monkeypatch.setattr(ql.shutil, "which", lambda _name: None)
+    repair = MagicMock(side_effect=SystemExit("must not rebuild Hermes"))
+    monkeypatch.setattr(managed_uv, "ensure_uv", repair)
+    engine = ql.QuickLocalSetup(health_check=lambda _url: (False, ""))
+    with pytest.raises(ql.QuickLocalSetupError, match="needs uv"):
+        engine._install_with_uv(ql.managed_paths(home), ["isolated-package"])
+    repair.assert_not_called()

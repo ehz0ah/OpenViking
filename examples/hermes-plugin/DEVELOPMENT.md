@@ -58,7 +58,9 @@ It repairs permissions on plugin-owned private files after backup restoration;
 no Hermes backup changes are required.
 
 `local_packages.py` selects reviewed OpenViking and llama-cpp-python binaries
-with installer-enforced SHA-256 hashes. Update those pins only after installation,
+with SHA-256 verification before installation. Both PM and pre-PM installers
+receive verified local wheel files. Setup records the applied requirements so
+that a later pin change updates an existing private runtime. Update pins only after installation,
 model and service checks pass on the listed platforms. Source builds require
 explicit consent. Platform CI runs real installation, local embedding, capture,
 restart and port-recovery checks. It uses a static test LLM configuration and

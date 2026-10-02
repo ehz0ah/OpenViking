@@ -11,6 +11,7 @@ import importlib.util
 import json
 import os
 import secrets
+import shutil
 import socket
 import subprocess
 import sys
@@ -41,7 +42,8 @@ _OVCLI_CONFIG_FILENAME = "ovcli.conf"
 _RESTART_REQUIRED_FILENAME = ".restart-required"
 _WORKSPACE_DIRNAME = "data"
 _MODEL_CACHE_DIRNAME = "models"
-_DEFAULT_PORT = 1933
+# Leave OpenViking's default 1933 available for independently managed servers.
+_DEFAULT_PORT = 1934
 _PORT_ATTEMPTS = 20
 _MODEL_DOWNLOAD_SIZE = "approximately 46 MiB"
 # OpenViking downloads the built-in model while its server lifespan starts.
@@ -397,7 +399,9 @@ class QuickLocalSetup:
                 reusable_endpoint = self._start_managed_server(preflight.paths, reusable_endpoint)
             self._emit(
                 QuickLocalStage.COMPLETE,
-                "Existing Quick Local server is reachable; reusing it.",
+                "Quick Local is ready with the updated settings."
+                if runtime_changed or config_changed
+                else "Existing Quick Local server is reachable; reusing it.",
             )
             return QuickLocalSetupResult(
                 paths=preflight.paths,
@@ -442,16 +446,24 @@ class QuickLocalSetup:
 
     def _ensure_openviking_installed(self, paths: QuickLocalPaths) -> bool:
         """Ensure a compatible runtime, returning whether installation was needed."""
-        if openviking_install_satisfies_requirement(paths):
+        from .local_packages import install_requirements, verified_requirements
+
+        requirements = install_requirements(allow_source_build=self.allow_source_build)
+        receipt = paths.root / "runtime-requirements.json"
+        try:
+            installed_requirements = json.loads(receipt.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            installed_requirements = None
+        if (
+            openviking_install_satisfies_requirement(paths)
+            and installed_requirements == requirements
+        ):
             return False
         self._emit(
             QuickLocalStage.INSTALL_OPENVIKING,
             f"Installing {OPENVIKING_REQUIREMENT}...",
         )
         _prepare_private_directory(paths.root)
-        from .local_packages import install_requirements
-
-        requirements = install_requirements(allow_source_build=self.allow_source_build)
         if self.allow_source_build:
             self._emit(
                 QuickLocalStage.INSTALL_OPENVIKING,
@@ -461,32 +473,38 @@ class QuickLocalSetup:
             from pm.client import ensure_python_tool
 
             try:
+                verified = verified_requirements(requirements, paths.root / "wheels")
                 ensure_python_tool(
                     "openviking-local",
-                    requirements,
+                    verified,
                     "openviking-server",
                     root=paths.runtime,
                     explicit=True,
                     timeout=1800,
                 )
+            except QuickLocalSetupError:
+                raise
             except Exception as exc:
                 raise QuickLocalSetupError(
                     "Could not install the private OpenViking runtime. Review the installer output."
                 ) from exc
         else:  # Genuine pre-PM Hermes only; never fall back on a broken PM import.
-            self._install_with_uv(paths, requirements)
+            self._install_with_uv(paths, verified_requirements(requirements, paths.root / "wheels"))
         if not openviking_install_satisfies_requirement(paths):
             raise QuickLocalSetupError(
                 "Could not install a compatible OpenViking local embedding runtime."
             )
+        atomic_json_write(receipt, requirements, mode=0o600)
         return True
 
     def _install_with_uv(self, paths: QuickLocalPaths, requirements: list[str]) -> None:
-        from hermes_cli.managed_uv import ensure_uv
+        from hermes_cli.managed_uv import resolve_uv
 
-        uv = ensure_uv()
+        # ensure_uv() can replace the active Hermes environment while setup is
+        # running. Use an existing installer without repairing the host runtime.
+        uv = resolve_uv() or shutil.which("uv")
         if not uv:
-            raise QuickLocalSetupError("Hermes could not prepare its uv installer.")
+            raise QuickLocalSetupError("Quick Local needs uv. Install uv, then retry setup.")
         env = _private_child_env(paths.root.parent)
         env.update(UV_NATIVE_TLS="true", UV_SYSTEM_CERTS="true")
         commands = []
@@ -677,7 +695,9 @@ def find_available_port(
 ) -> Optional[int]:
     preferred_port = _endpoint_port(preferred_endpoint)
     candidates = range(first_port, first_port + attempts)
-    if preferred_port is not None and preferred_port in candidates:
+    if preferred_port is not None and (
+        preferred_port in candidates or (first_port == _DEFAULT_PORT and preferred_port == 1933)
+    ):
         candidates = [
             preferred_port,
             *(port for port in candidates if port != preferred_port),
@@ -1022,6 +1042,7 @@ def repair_private_paths(paths: QuickLocalPaths) -> None:
         paths.restart_required_marker,
         paths.root / "server-process.json",
         paths.root / "server.lock",
+        paths.root / "runtime-requirements.json",
     ):
         if path.is_symlink():
             raise QuickLocalSetupError("Quick Local private files must belong to this profile.")

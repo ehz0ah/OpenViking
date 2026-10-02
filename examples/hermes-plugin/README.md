@@ -115,6 +115,8 @@ Run setup again after changing the Hermes model or API key. Setup validates
 the new settings and restarts this profile's server. Data and the model cache
 are retained. Each profile has its own server and port; Quick Local moves to
 a free port if another service takes its saved port.
+New setups use ports 1934–1953, leaving OpenViking's default port 1933 free.
+Existing Quick Local profiles keep their saved port when it is available.
 
 The server stays running after Hermes exits. Use these commands in the same
 Hermes profile to control it:
@@ -129,7 +131,16 @@ hermes openviking local restart
 Stopping the server retains its data. Hermes starts it again when memory is
 next used. These commands and Quick Local setup require the external provider
 to be active; a bundled copy still takes precedence where present.
-Cloud and Custom connections retain their existing behavior.
+Switching to Cloud or Custom stops this profile's managed server and retains
+its data. The existing Cloud and Custom connection choices remain available.
+Hermes backups include Quick Local files under the profile home; the plugin
+adds a linked `ovcli.conf` only when it is outside that home.
+
+Before removing the plugin, run `hermes openviking local stop`, then select a
+different memory provider or disable OpenViking memory. Finally, run
+`hermes plugins remove openviking`. The private runtime, model cache and data
+remain in `$HERMES_HOME/openviking/`; they can use more than 1 GB per profile.
+Plugin removal does not stop a running server.
 
 Setup first asks how the Hermes instance is used:
 

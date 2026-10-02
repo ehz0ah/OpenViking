@@ -201,12 +201,38 @@ class LocalServer:
     def configure(self, config, *, runtime_changed=False):
         with self.locked():
             changed = not self.ql._stored_server_config_matches(self.paths, config)
+            if (changed or runtime_changed) and self.paths.server_config.is_file():
+                # Authenticate/adopt against the OLD config. Publishing a new
+                # key first makes a lost process record impossible to recover.
+                # Setup can repair an incomplete ovcli file; only the old
+                # server config/key is needed for authenticated adoption.
+                old_config = json.loads(self.paths.server_config.read_text(encoding="utf-8"))
+                endpoint = self.ql._configured_endpoint(self.paths)
+                process = self._verified_process(self._read_record())
+                if process is None:
+                    process = self._adopt(old_config, endpoint)
+                if process is None and self.ql.server_belongs_to_profile(self.paths, endpoint):
+                    raise self.ql.QuickLocalSetupError(
+                        "Quick Local cannot verify the server process. Existing settings were retained. "
+                        "Stop that server manually, then retry."
+                    )
             if changed or runtime_changed:
                 self.ql._mark_server_restart_required(self.paths)
             atomic_json_write(self.paths.server_config, config, mode=0o600)
             self.ql._write_ovcli_profile(
                 self.paths.ovcli_config, f"http://127.0.0.1:{config['server']['port']}", config
             )
+
+    def is_running(self, endpoint):
+        """Cheap owned-process check for a retained provider's cached client."""
+        record = self._read_record()
+        if record.get("port") == self.ql._endpoint_port(endpoint) and self._verified_process(
+            record
+        ):
+            return True
+        # A server started outside the controller may have no record. Keep
+        # serving from it while its key still proves profile ownership.
+        return self.ql.server_belongs_to_profile(self.paths, endpoint)
 
     def start(self, *, restart=False):
         ql = self.ql
@@ -239,7 +265,7 @@ class LocalServer:
             self.record_path.unlink(missing_ok=True)
             port = ql.find_available_port(preferred_endpoint=endpoint)
             if port is None:
-                raise ql.QuickLocalSetupError("No free Quick Local port was found (1933-1952).")
+                raise ql.QuickLocalSetupError("No free Quick Local port was found (1934-1953).")
             endpoint = f"http://127.0.0.1:{port}"
             config["server"]["port"] = port
             atomic_json_write(self.paths.server_config, config, mode=0o600)

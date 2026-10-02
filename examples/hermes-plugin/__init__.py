@@ -1433,6 +1433,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
         self._failed_refresh: Optional[tuple] = None
         self._runtime_start_thread: Optional[threading.Thread] = None
         self._runtime_start_pending = False
+        self._runtime_status_callback = None
+        self._runtime_warning_callback = None
         self._shutting_down = False  # finalizers stop issuing network writes
         # Non-primary contexts (cron/subagent/flush) skip OpenViking writes; resolved in
         # initialize() from the host's agent_context.
@@ -1666,6 +1668,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
         is_cli = kwargs.get("platform") == "cli"
         warning_callback = kwargs.get("warning_callback") if is_cli else None
         status_callback = kwargs.get("status_callback") if is_cli else None
+        self._runtime_status_callback = status_callback
+        self._runtime_warning_callback = warning_callback
         requested_home = str(kwargs.get("hermes_home") or "").strip()
         self._hermes_home = requested_home or str(get_hermes_home())
         self._hermes_home_bound = bool(requested_home)
@@ -1739,7 +1743,10 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if not self._env_refresh_enabled:
             return self._client  # no baseline yet: keep whatever the caller wired up
         with self._client_refresh_lock:
-            return self._ensure_client_locked()
+            return self._ensure_client_locked(
+                status_callback=self._runtime_status_callback,
+                warning_callback=self._runtime_warning_callback,
+            )
 
     def _profile_config_and_env(self) -> tuple[dict, Optional[dict]]:
         home = self._hermes_home if self._hermes_home_bound else None
@@ -1782,6 +1789,15 @@ class OpenVikingMemoryProvider(MemoryProvider):
         settings_key = tuple(settings[k] for k in _CONNECTION_KEYS)
         if settings_key == self._settings_tuple():
             if self._client is not None:
+                if managed:
+                    from .local_server import LocalServer
+
+                    server = LocalServer(Path(self._hermes_home or get_hermes_home()))
+                    if not server.is_running(settings_key[0]):
+                        self._handle_runtime_openviking_unreachable(
+                            status_callback=status_callback, warning_callback=warning_callback
+                        )
+                        return None
                 return self._client
             with self._runtime_start_lock:
                 if self._runtime_start_pending or (self._runtime_start_thread and self._runtime_start_thread.is_alive()):

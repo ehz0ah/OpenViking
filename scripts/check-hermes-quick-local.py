@@ -13,8 +13,19 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+
+def wait_for_provider(provider, timeout=180):
+    """Exercise retained-provider autostart, never the controller's start path."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if provider._ensure_client() is not None:
+            return
+        time.sleep(.1)
+    raise AssertionError("The retained external provider did not recover its managed server")
 
 
 def check_llm_transports(home, ql, runtime_python):
@@ -129,7 +140,9 @@ def main():
                         "api_mode": "chat_completions",
                     }
                 ],
-                "memory": {"provider": "openviking", "openviking": {"deployment": "quick_local"}},
+                "memory": {"provider": "openviking", "openviking": {
+                    "deployment": "quick_local", "use_ovcli_config": True,
+                }},
                 "plugins": {"enabled": ["openviking"]},
             }
             (home / "config.yaml").write_text(json.dumps(config), encoding="utf-8")
@@ -170,6 +183,27 @@ def main():
                     )
                 )
                 assert not browse.get("error")
+                # Keep this provider/session alive through a crash and an
+                # explicit stop. Later use must recover without a new agent.
+                import psutil
+
+                for action in ("crash", "stop"):
+                    old_pid = server.status()["pid"]
+                    if action == "crash":
+                        process = psutil.Process(old_pid)
+                        owned = [*process.children(recursive=True), process]
+                        for child in owned:
+                            try:
+                                child.kill()
+                            except psutil.NoSuchProcess:
+                                pass
+                        psutil.wait_procs(owned, timeout=5)
+                    else:
+                        server.stop()
+                    assert provider._ensure_client() is None
+                    wait_for_provider(provider)
+                    assert server.status()["pid"] != old_pid
+                    assert provider._client.get("/api/v1/sessions/local-smoke-" + name)["result"]["pending_tokens"] > 0
                 old_pid = server.status()["pid"]
                 updated = server._config()
                 updated["vlm"]["api_key"] = "updated-isolated-static-key"
@@ -206,16 +240,21 @@ def main():
             b.start(), lambda url: (b.ql.server_belongs_to_profile(b.paths, url), ""), timeout=120
         )
         foreign_pid = b.status()["pid"]
-        moved = a.wait_ready(
-            a.start(), lambda url: (a.ql.server_belongs_to_profile(a.paths, url), ""), timeout=120
-        )
-        assert moved.endpoint != previous and b.status()["pid"] == foreign_pid
+        token = set_hermes_home_override(a.paths.root.parent)
+        try:
+            assert providers[0]._ensure_client() is None
+            wait_for_provider(providers[0])
+            assert providers[0]._endpoint != previous and b.status()["pid"] == foreign_pid
+            assert providers[0]._client.get("/api/v1/sessions/local-smoke-a")["result"]["pending_tokens"] > 0
+        finally:
+            reset_hermes_home_override(token)
         evidence.update(
             external_loader=True,
             real_embeddings=True,
             captured_turns=True,
             restart_preserved_data=True,
             foreign_port_recovery=True,
+            retained_provider_recovery=True,
         )
         print(json.dumps(evidence))
     finally:
