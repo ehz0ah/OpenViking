@@ -606,3 +606,24 @@ def test_legacy_install_without_uv_fails_without_repairing_hermes(modules, monke
     with pytest.raises(ql.QuickLocalSetupError, match="needs uv"):
         engine._install_with_uv(ql.managed_paths(home), ["isolated-package"])
     repair.assert_not_called()
+
+
+def test_lost_record_adoption_survives_a_selected_runtime_upgrade(servers, modules, monkeypatch):
+    _home, _p, _m, ql, _life, _packages = modules
+    server = servers("old-runtime")
+    ready(server)
+    old_pid = server.status()["pid"]
+    server.record_path.unlink()
+    old_command = server.paths.server_command
+    new_command = server.paths.runtime / "new-generation/bin/openviking-server"
+    new_command.parent.mkdir(parents=True)
+    new_command.write_bytes(old_command.read_bytes())
+    monkeypatch.setattr(ql.QuickLocalPaths, "server_command", property(lambda _self: new_command))
+    config = server._config()
+    config["server"]["root_api_key"] = "rotated-test-key"
+    server.configure(config, runtime_changed=True)
+    assert server._read_record()["pid"] == old_pid
+    assert server._read_record()["command"] == str(old_command)
+    ready(server)
+    assert server.status()["pid"] != old_pid
+    assert server._read_record()["command"] == str(new_command)

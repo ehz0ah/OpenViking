@@ -181,10 +181,25 @@ class LocalServer:
         for process in psutil.process_iter(["pid", "create_time", "cmdline"]):
             try:
                 args = process.info["cmdline"] or []
+                # A runtime upgrade may select a new PM generation before
+                # setup recovers the OLD server's lost record. Adopt only an
+                # OpenViking entrypoint inside this profile's private runtime.
+                command = next(
+                    (
+                        arg
+                        for arg in args[:2]
+                        if Path(arg).name
+                        in {"openviking-server", "openviking-server.exe", "openviking-server.cmd"}
+                        and Path(arg).absolute().is_relative_to(self.paths.runtime.absolute())
+                    ),
+                    None,
+                )
+                if command is None:
+                    continue
                 record = {
                     "pid": process.pid,
                     "created": process.info["create_time"],
-                    "command": str(self.paths.server_command),
+                    "command": command,
                     "port": self.ql._endpoint_port(endpoint),
                     "fingerprint": self._fingerprint(config),
                 }
