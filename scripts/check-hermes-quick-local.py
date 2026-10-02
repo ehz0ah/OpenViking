@@ -33,18 +33,20 @@ def check_llm_transports(home, ql, runtime_python):
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
     requests = []
+    request_headers = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             self.rfile.read(int(self.headers["Content-Length"]))
             requests.append(self.path)
+            request_headers.append(dict(self.headers))
             print("Observed LLM request: " + self.path, flush=True)
-            if self.path == "/v1/chat/completions":
+            if self.path in {"/v1/chat/completions", "/v1beta/openai/chat/completions"}:
                 body = {"id": "chat-test", "object": "chat.completion", "model": "gpt-test",
                         "choices": [{"index": 0, "message": {"role": "assistant", "content": "transport-ok"},
                                      "finish_reason": "stop"}],
                         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}
-            elif self.path == "/anthropic/v1/messages":
+            elif self.path in {"/anthropic/v1/messages", "/coding/v1/messages"}:
                 body = {"id": "msg-test", "type": "message", "role": "assistant", "model": "claude-test",
                         "content": [{"type": "text", "text": "transport-ok"}], "stop_reason": "end_turn",
                         "stop_sequence": None, "usage": {"input_tokens": 1, "output_tokens": 1}}
@@ -72,13 +74,26 @@ def check_llm_transports(home, ql, runtime_python):
             ("anthropic_messages", "/anthropic", "claude-test", "/anthropic/v1/messages"),
             ("anthropic_messages", "/anthropic/v1", "claude-test", "/anthropic/v1/messages"),
             ("anthropic_messages", "/anthropic/v1/", "claude-test", "/anthropic/v1/messages"),
+            ("chat_completions", "/v1beta", "gemini-test", "/v1beta/openai/chat/completions"),
+            ("anthropic_messages", "/coding", "claude-test", "/coding/v1/messages"),
         ):
+            base = f"http://127.0.0.1:{server.server_port}{suffix}"
+            if suffix == "/v1beta":
+                base = "https://generativelanguage.googleapis.com/v1beta"
+            elif suffix == "/coding":
+                base = "https://api.kimi.com/coding"
             config = {"model": {"provider": "custom:transport", "default": model}, "custom_providers": [
-                {"name": "transport", "base_url": f"http://127.0.0.1:{server.server_port}{suffix}",
+                {"name": "transport", "base_url": base,
                  "api_key": "static-test-key", "api_mode": mode}
             ]}
             (home / "config.yaml").write_text(json.dumps(config), encoding="utf-8")
             vlm = ql.resolve_hermes_vlm_config()
+            if suffix in {"/v1beta", "/coding"}:
+                from urllib.parse import urlparse
+
+                # Resolve with the real provider host, then use the loopback
+                # fixture only for observing the installed backend's request.
+                vlm["api_base"] = f"http://127.0.0.1:{server.server_port}" + urlparse(vlm["api_base"]).path
             script = (
                 "import json,sys; from openviking.models.vlm import VLMFactory; "
                 "v=VLMFactory.create(json.load(sys.stdin)); "
@@ -88,6 +103,9 @@ def check_llm_transports(home, ql, runtime_python):
             subprocess.run([str(runtime_python), "-c", script], input=json.dumps(vlm),
                            text=True, check=True, timeout=120)
             assert requests[count:] == [expected], requests[count:]
+            if suffix == "/coding":
+                assert request_headers[-1]["User-Agent"].startswith("HermesAgent/")
+                assert request_headers[-1]["x-api-key"] == "static-test-key"
         return requests
     finally:
         reset_hermes_home_override(token)
@@ -121,6 +139,33 @@ def main():
     source = Path(__file__).resolve().parents[1] / "examples/hermes-plugin"
     servers, providers = [], []
     evidence = {"legacy_uv": args.legacy_uv, "profiles": []}
+    llm_requests = []
+
+    class LLMHandler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            if self.path != "/v1/chat/completions" or self.headers.get("Authorization") not in {
+                "Bearer isolated-static-test-key", "Bearer updated-isolated-static-key"
+            }:
+                self.send_error(401)
+                return
+            llm_requests.append(self.path)
+            body = json.dumps({"id": "setup-test", "object": "chat.completion", "model": "test-model",
+                               "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"},
+                                            "finish_reason": "stop"}],
+                               "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    llm_server = ThreadingHTTPServer(("127.0.0.1", 0), LLMHandler)
+    llm_worker = threading.Thread(target=llm_server.serve_forever, daemon=True)
+    llm_worker.start()
     try:
         for name in ("a", "b"):
             home = root / name
@@ -135,7 +180,7 @@ def main():
                 "custom_providers": [
                     {
                         "name": "test",
-                        "base_url": "http://127.0.0.1:9/v1",
+                        "base_url": f"http://127.0.0.1:{llm_server.server_port}/v1",
                         "api_key": "isolated-static-test-key",
                         "api_mode": "chat_completions",
                     }
@@ -163,6 +208,23 @@ def main():
                 module = importlib.import_module(type(provider).__module__)
                 setup = ql.QuickLocalSetup(health_check=module._validate_openviking_reachability)
                 setup.provision(hermes_home=home)
+                assert len(llm_requests) >= len(evidence["profiles"]) + 1
+                before = {path: path.read_bytes() for path in (
+                    server.paths.server_config, server.paths.ovcli_config
+                )}
+                config["custom_providers"][0]["api_key"] = "invalid-static-test-key"
+                (home / "config.yaml").write_text(json.dumps(config), encoding="utf-8")
+                try:
+                    setup.provision(hermes_home=home)
+                except ql.QuickLocalSetupError as error:
+                    assert "LLM settings failed the access check" in str(error), str(error)
+                else:
+                    raise AssertionError("Invalid copied LLM key passed setup")
+                finally:
+                    config["custom_providers"][0]["api_key"] = "isolated-static-test-key"
+                    (home / "config.yaml").write_text(json.dumps(config), encoding="utf-8")
+                assert all(path.read_bytes() == data for path, data in before.items())
+                assert not server.paths.restart_required_marker.exists()
                 if name == "a":
                     evidence["llm_request_paths"] = check_llm_transports(
                         root / "transport-config", ql, server.paths.runtime_python
@@ -256,6 +318,8 @@ def main():
             restart_preserved_data=True,
             foreign_port_recovery=True,
             retained_provider_recovery=True,
+            llm_access_validated=True,
+            llm_failure_preserved_configuration=True,
         )
         print(json.dumps(evidence))
     finally:
@@ -264,6 +328,9 @@ def main():
         for server in reversed(servers):
             if server.paths.server_config.exists():
                 server.stop()
+        llm_server.shutdown()
+        llm_server.server_close()
+        llm_worker.join(timeout=5)
         (root / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
 
 

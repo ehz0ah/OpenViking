@@ -65,6 +65,12 @@ model and service checks pass on the listed platforms. Source builds require
 explicit consent. Platform CI runs real installation, local embedding, capture,
 restart and port-recovery checks. It uses a static test LLM configuration and
 does not establish live memory extraction; that remains a release check.
+The reviewed hashes cover the OpenViking and llama-cpp-python wheels only.
+PM/uv resolve the other dependencies; this is not a fully locked server runtime.
+Source builds use package version pins without reviewed binary hashes. A platform
+needs a tested OpenViking/embedding-wheel pair for the prebuilt path.
+Setup also checks LLM access through the installed OpenViking backend. The CI
+fixture must serve an actual completion; an unreachable LLM must fail setup.
 
 ## Migration coordination
 

@@ -256,6 +256,7 @@ def test_cold_import_timeout_does_not_trigger_reinstallation(modules, monkeypatc
 @pytest.mark.parametrize("failure", [1, subprocess.TimeoutExpired("embedding", 660)])
 def test_failed_native_embedding_does_not_activate_setup(modules, monkeypatch, failure):
     home, _p, _m, ql, _life, _packages = modules
+    monkeypatch.setattr(ql, "_validate_vlm", lambda *_args: None)
     monkeypatch.setattr(ql, "_pm_available", lambda: False)
     monkeypatch.setattr(ql, "_private_child_env", lambda target: {"HERMES_HOME": str(target)})
     run = MagicMock()
@@ -601,8 +602,10 @@ def test_changed_native_pins_reinstall_an_existing_runtime(modules, monkeypatch)
 
 def test_legacy_install_without_uv_fails_without_repairing_hermes(modules, monkeypatch):
     from hermes_cli import managed_uv
+    import hermes_constants
 
     home, _p, _m, ql, _life, _packages = modules
+    monkeypatch.setattr(hermes_constants, "get_default_hermes_root", lambda: home)
     monkeypatch.setattr(managed_uv, "resolve_uv", lambda: None)
     monkeypatch.setattr(ql.shutil, "which", lambda _name: None)
     repair = MagicMock(side_effect=SystemExit("must not rebuild Hermes"))

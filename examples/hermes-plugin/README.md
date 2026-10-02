@@ -98,6 +98,12 @@ settings for memory extraction. The LLM must use a static API key or Hermes's
 local llama.cpp server, with an OpenAI-compatible or Anthropic-compatible API.
 OAuth and cloud-native
 credentials cannot be copied; use Custom for those deployments.
+Google AI Studio uses its OpenAI-compatible endpoint. Static OpenAI and xAI
+API keys use Chat Completions; the selected model must support that API.
+Kimi Coding retains Hermes's client attribution. Anthropic routes that need
+Bearer authentication, including MiniMax and Azure Foundry, and proxy keys
+that LiteLLM would treat as OAuth require a separately configured Custom server.
+Setup checks the copied LLM with one short completion before activation.
 
 Quick Local stores its runtime, data, model cache, and private configuration in
 `$HERMES_HOME/openviking/`. Setup validates it, then leaves its localhost server
@@ -110,6 +116,8 @@ with pinned hashes on macOS 14+ (Apple Silicon), Linux with glibc 2.31+
 (x86-64 or ARM64), and Windows x86-64. Setup asks before a source build on
 other platforms. A source build needs native development tools and can take
 several minutes. You can choose Custom instead and use a separate server.
+Downloads require access to PyPI, GitHub and Hugging Face. The local BGE model
+is trained for Chinese; use Custom for a server with a different embedding model.
 
 Run setup again after changing the Hermes model or API key. Setup validates
 the new settings and restarts this profile's server. Data and the model cache
@@ -129,7 +137,10 @@ hermes openviking local restart
 ```
 
 Stopping the server retains its data. Hermes starts it again when memory is
-next used. These commands and Quick Local setup require the external provider
+next used, including from a running gateway. Close those sessions or disable
+OpenViking memory for it to stay stopped. While background startup or recovery
+is in progress, new turns are not captured until the server is ready.
+These commands and Quick Local setup require the external provider
 to be active; a bundled copy still takes precedence where present.
 Switching to Cloud or Custom stops this profile's managed server and retains
 its data. The existing Cloud and Custom connection choices remain available.
@@ -142,6 +153,10 @@ different memory provider or disable OpenViking memory. Finally, run
 `hermes plugins remove openviking`. The private runtime, model cache and data
 remain in `$HERMES_HOME/openviking/`; they can use more than 1 GB per profile.
 Plugin removal does not stop a running server.
+Each running profile also uses several hundred MB of memory. Package upgrades
+retain old runtime generations and wheel files, so disk use can increase.
+After restoring a backup on another machine, run setup again to rebuild any
+runtime excluded from the backup before using Quick Local.
 
 Setup first asks how the Hermes instance is used:
 

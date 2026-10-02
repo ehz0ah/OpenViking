@@ -30,7 +30,7 @@ from utils import atomic_json_write
 DEPLOYMENT = "quick_local"
 EMBEDDING_MODEL = "bge-small-zh-v1.5-f16"
 EMBEDDING_DIMENSION = 512
-OPENVIKING_REQUIREMENT = "openviking[local-embed]>=0.4.22,<0.5"
+OPENVIKING_REQUIREMENT = "openviking[local-embed]==0.4.22"
 # Later LiteLLM releases exclude Python 3.14. OpenViking supports this version.
 # This restriction applies only to the private server, never Hermes's dependencies.
 
@@ -254,13 +254,13 @@ def resolve_hermes_vlm_config() -> dict[str, Any]:
         and urlparse(api_base).hostname in {"localhost", "127.0.0.1", "::1"}
     )
     declared_key = bool(key_env and source in {key_env, f"env:{key_env}"})
-    from agent.anthropic_credentials import anthropic_route_is_oauth
-
     # A declared env variable identifies a source, not a static credential.
     # Hermes owns native Anthropic OAuth authentication and token refresh.
-    oauth_route = api_mode == "anthropic_messages" and isinstance(raw_api_key, str) and (
-        anthropic_route_is_oauth(api_base, raw_api_key, provider=provider)
-    )
+    oauth_route = False
+    if api_mode == "anthropic_messages" and isinstance(raw_api_key, str):
+        from agent.anthropic_credentials import anthropic_route_is_oauth
+
+        oauth_route = anthropic_route_is_oauth(api_base, raw_api_key, provider=provider)
     if oauth_route or not isinstance(raw_api_key, str) or not (
         local_runtime or declared_key or _has_copyable_static_credentials(provider, source, api_key)
     ):
@@ -270,6 +270,12 @@ def resolve_hermes_vlm_config() -> dict[str, Any]:
             "a static API-key LLM for Hermes, or connect to an OpenViking server "
             "configured separately."
         )
+    # These static-key API endpoints also provide Chat Completions. OAuth
+    # Responses routes and third-party Responses-only endpoints stay excluded.
+    if api_mode == "codex_responses" and urlparse(api_base).hostname in {
+        "api.openai.com", "api.x.ai"
+    } and provider in {"openai-api", "xai"}:
+        api_mode = "chat_completions"
     if api_mode not in {"chat_completions", "anthropic_messages"}:
         raise QuickLocalSetupError(
             f"Hermes' {api_mode or 'unknown'} LLM transport is not supported by "
@@ -281,6 +287,17 @@ def resolve_hermes_vlm_config() -> dict[str, Any]:
     if api_mode == "anthropic_messages":
         # Like Hermes's Anthropic SDK, LiteLLM appends /v1/messages itself.
         api_base = api_base.rstrip("/").removesuffix("/v1")
+        from agent.anthropic_adapter import _attribution_headers, _auth_style
+
+        style = _auth_style(api_key, api_base, api_base)
+        # OV's pinned LiteLLM backend cannot reproduce Hermes's bearer/query
+        # handling. It also treats sk-ant-oat-shaped proxy keys as native OAuth.
+        if style == "bearer" or api_key.startswith("sk-ant-oat"):
+            raise QuickLocalSetupError(
+                "Quick Local cannot reproduce authentication for this Anthropic route. "
+                "Use an OpenAI-compatible route for Hermes, or Custom setup "
+                "with a separately configured OpenViking server."
+            )
         if not runtime_model.startswith("anthropic/"):
             runtime_model = f"anthropic/{runtime_model}"
         vlm = {
@@ -289,7 +306,14 @@ def resolve_hermes_vlm_config() -> dict[str, Any]:
             "api_key": api_key,
             "api_base": api_base,
         }
+        if style == "kimi":
+            vlm["extra_headers"] = _attribution_headers()
     else:
+        base = urlparse(api_base)
+        if base.hostname == "generativelanguage.googleapis.com" and not base.path.rstrip("/").endswith("/openai"):
+            # Hermes uses Google's native client despite chat_completions in
+            # its runtime record. OV needs Google's documented OpenAI route.
+            api_base = base._replace(path="/v1beta/openai/").geturl()
         vlm = {
             "provider": "openai",
             "model": runtime_model,
@@ -299,7 +323,7 @@ def resolve_hermes_vlm_config() -> dict[str, Any]:
 
     extra_headers = runtime.get("extra_headers")
     if isinstance(extra_headers, dict) and extra_headers:
-        vlm["extra_headers"] = dict(extra_headers)
+        vlm["extra_headers"] = {**vlm.get("extra_headers", {}), **extra_headers}
     request_overrides = runtime.get("request_overrides")
     if isinstance(request_overrides, dict):
         extra_body = request_overrides.get("extra_body")
@@ -394,7 +418,7 @@ class QuickLocalSetup:
                 LocalServer(hermes_home).configure(server_config, runtime_changed=runtime_changed)
                 self._emit(
                     QuickLocalStage.WRITE_CONFIG,
-                    "Restarting Quick Local with the updated Hermes LLM settings...",
+                    "Restarting Quick Local with the updated settings...",
                 )
                 reusable_endpoint = self._start_managed_server(preflight.paths, reusable_endpoint)
             self._emit(
@@ -499,10 +523,12 @@ class QuickLocalSetup:
 
     def _install_with_uv(self, paths: QuickLocalPaths, requirements: list[str]) -> None:
         from hermes_cli.managed_uv import resolve_uv
+        from hermes_constants import get_default_hermes_root
 
         # ensure_uv() can replace the active Hermes environment while setup is
         # running. Use an existing installer without repairing the host runtime.
-        uv = resolve_uv() or shutil.which("uv")
+        shared_uv = get_default_hermes_root() / "bin" / ("uv.exe" if os.name == "nt" else "uv")
+        uv = resolve_uv() or shutil.which("uv") or (str(shared_uv) if shared_uv.is_file() else None)
         if not uv:
             raise QuickLocalSetupError("Quick Local needs uv. Install uv, then retry setup.")
         env = _private_child_env(paths.root.parent)
@@ -551,6 +577,9 @@ class QuickLocalSetup:
             validation_config["storage"]["workspace"] = str(validation_root / _WORKSPACE_DIRNAME)
             config_path = validation_root / _SERVER_CONFIG_FILENAME
             atomic_json_write(config_path, validation_config, mode=0o600)
+
+            self._emit(QuickLocalStage.VALIDATE, "Checking the copied Hermes LLM settings...")
+            _validate_vlm(paths, config_path)
 
             _prepare_private_directory(paths.model_cache)
             self._emit(
@@ -616,6 +645,45 @@ class QuickLocalSetup:
 
     def _emit(self, stage: QuickLocalStage, message: str) -> None:
         self._progress(QuickLocalProgress(stage=stage, message=message))
+
+
+def _validate_vlm(paths: QuickLocalPaths, config_path: Path) -> None:
+    """Check auth and transport through the exact private OV backend before activation."""
+    script = """
+import json, sys
+from openviking.models.vlm import VLMFactory
+try:
+    config = json.load(open(sys.argv[1], encoding="utf-8"))["vlm"]
+    vlm = VLMFactory.create({**config, "timeout": 30, "max_retries": 0})
+    reply = vlm.get_completion(prompt="Reply with OK only.")
+    if not isinstance(reply, str) or not reply.strip():
+        raise ValueError("Empty completion")
+except Exception as exc:
+    print(json.dumps({"error": type(exc).__name__}))
+    sys.exit(1)
+"""
+    try:
+        result = subprocess.run(
+            [str(paths.runtime_python), "-c", script, str(config_path)],
+            cwd=paths.root.parent,
+            env=_private_child_env(paths.root.parent),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+        if result.returncode:
+            raise QuickLocalSetupError(
+                "The copied Hermes LLM settings failed the access check. "
+                "Check the model, API key and endpoint in Hermes, then retry. "
+                "The model must support Chat Completions or Anthropic Messages."
+            )
+    except subprocess.TimeoutExpired as exc:
+        raise QuickLocalSetupError(
+            "The Hermes LLM access check timed out. Check its endpoint, then retry setup."
+        ) from exc
 
 
 def openviking_install_satisfies_requirement(paths: QuickLocalPaths) -> bool:

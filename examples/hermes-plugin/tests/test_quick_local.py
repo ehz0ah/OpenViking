@@ -24,6 +24,7 @@ def plugin_modules(external_provider, monkeypatch):
     setup_flow = importlib.import_module(openviking_module.__name__ + "._setup")
     monkeypatch.setattr(quick_local.secrets, "token_urlsafe", lambda _size: "local-test-key")
     monkeypatch.setattr(quick_local, "_validate_local_embedding", MagicMock())
+    monkeypatch.setattr(quick_local, "_validate_vlm", MagicMock())
 
 
 def _preflight(tmp_path: Path) -> quick_local.QuickLocalPreflight:
@@ -314,7 +315,7 @@ def test_resolve_vlm_accepts_structured_persisted_default(monkeypatch):
             {
                 "provider": "openai-api",
                 "api_mode": "codex_responses",
-                "base_url": "https://api.openai.com/v1",
+                "base_url": "https://responses-only.example/v1",
                 "api_key": "secret",
                 "source": "OPENAI_API_KEY",
             },

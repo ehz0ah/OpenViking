@@ -47,7 +47,7 @@ _PACKAGES = {
 
 
 def install_requirements(*, allow_source_build=False):
-    from .quick_local import SourceBuildRequired
+    from .quick_local import OPENVIKING_REQUIREMENT, SourceBuildRequired
 
     system = platform.system()
     machine = platform.machine().lower()
@@ -68,7 +68,7 @@ def install_requirements(*, allow_source_build=False):
                 "Use a separate OpenViking server, or explicitly allow a source build "
                 "in setup. A build needs native development tools and can take several minutes."
             )
-        requirements = ["openviking[local-embed]==0.4.22", "llama-cpp-python==0.3.30"]
+        requirements = [OPENVIKING_REQUIREMENT, "llama-cpp-python==0.3.30"]
     else:
         ov_path, ov_hash, cpp_path, cpp_hash = packages
         requirements = [
