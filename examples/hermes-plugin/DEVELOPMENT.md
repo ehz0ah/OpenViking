@@ -52,8 +52,17 @@ Quick Local adapts [Hermes PR #94851](https://github.com/NousResearch/hermes-age
 from the setup UI. The port uses current Hermes PM, authenticated server reuse,
 and paths derived from the provider's bound home. On Python 3.14, the private
 server uses LiteLLM 1.83.7, within OpenViking's supported range; later LiteLLM
-releases exclude that Python version. The original Hermes backup permission
-change is outside this plugin's scope.
+releases exclude that Python version. The profile server controller verifies
+the PID, creation time, executable and config path before stopping a process.
+It repairs permissions on plugin-owned private files after backup restoration;
+no Hermes backup changes are required.
+
+`local_packages.py` selects reviewed OpenViking and llama-cpp-python binaries
+with installer-enforced SHA-256 hashes. Update those pins only after installation,
+model and service checks pass on the listed platforms. Source builds require
+explicit consent. Platform CI runs real installation, local embedding, capture,
+restart and port-recovery checks. It uses a static test LLM configuration and
+does not establish live memory extraction; that remains a release check.
 
 ## Migration coordination
 

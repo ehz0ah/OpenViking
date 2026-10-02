@@ -142,6 +142,30 @@ def test_resolve_vlm_maps_anthropic_transport(monkeypatch):
     assert vlm["api_base"] == "https://api.anthropic.com"
 
 
+def test_resolve_vlm_accepts_declared_model_key_env(monkeypatch):
+    from hermes_cli import auth, config, runtime_provider
+    saved = {"model": {"provider": "lmstudio", "default": "local-model", "key_env": "TEST_LLM_KEY"}}
+    monkeypatch.setattr(config, "load_config", lambda: saved)
+    monkeypatch.setattr(config, "get_env_value_prefer_dotenv", lambda name: "static-test-key" if name == "TEST_LLM_KEY" else "")
+    key, source = auth._resolve_api_key_provider_secret("lmstudio", auth.PROVIDER_REGISTRY["lmstudio"])
+    monkeypatch.setattr(runtime_provider, "resolve_runtime_provider", lambda **_kwargs: {
+        "provider": "lmstudio", "source": source, "api_key": key,
+        "base_url": "http://127.0.0.1:1234/v1", "api_mode": "chat_completions"})
+    assert quick_local.resolve_hermes_vlm_config()["api_key"] == "static-test-key"
+
+
+@pytest.mark.parametrize("key", ["", "local-static-key"])
+def test_resolve_vlm_accepts_hermes_local_runtime(monkeypatch, key):
+    from hermes_cli import config, runtime_provider, runtime_provider_custom
+    endpoint = pytest.importorskip("hermes_cli.local_runtime.endpoint")
+    monkeypatch.setattr(config, "load_config", lambda: {"model": {"default": "local-model", "provider": "llamacpp"}})
+    monkeypatch.setattr(endpoint, "resolve_llamacpp_endpoint", lambda **_kwargs: {
+        "base_url": "http://127.0.0.1:8090/v1", "api_key": key})
+    runtime = runtime_provider_custom._resolve_llamacpp_runtime("llamacpp", None)
+    monkeypatch.setattr(runtime_provider, "resolve_runtime_provider", lambda **_kwargs: runtime)
+    assert quick_local.resolve_hermes_vlm_config()["api_key"] == (key or "no-key-required")
+
+
 def test_resolve_vlm_accepts_structured_persisted_default(monkeypatch):
     from hermes_cli import config as config_module
     from hermes_cli import runtime_provider
@@ -442,12 +466,22 @@ def test_reuse_rechecks_runtime_and_refreshes_saved_vlm(tmp_path, monkeypatch):
     )
     ensure_runtime = MagicMock(return_value=False)
     monkeypatch.setattr(setup, "_ensure_openviking_installed", ensure_runtime)
+    monkeypatch.setattr(quick_local, "find_available_port", lambda **_kwargs: 1940)
+    validate = MagicMock()
+    monkeypatch.setattr(setup, "_validate_generated_config", validate)
+    def restart(paths, endpoint):
+        quick_local.clear_server_restart_required(paths.server_config)
+        return endpoint
+    restart = MagicMock(side_effect=restart)
+    monkeypatch.setattr(setup, "_start_managed_server", restart)
 
     result = setup.provision(hermes_home=tmp_path)
 
     assert result.reused is True
     assert result.endpoint == "http://127.0.0.1:1938"
-    assert result.server_restart_required is True
+    assert result.server_restart_required is False
+    validate.assert_called_once()
+    restart.assert_called_once_with(paths, "http://127.0.0.1:1938")
     assert json.loads(paths.server_config.read_text(encoding="utf-8")) == (
         quick_local.build_server_config(paths, new_vlm, port=1938)
     )
@@ -455,7 +489,8 @@ def test_reuse_rechecks_runtime_and_refreshes_saved_vlm(tmp_path, monkeypatch):
     ensure_runtime.assert_called_once_with(paths)
 
 
-def test_reuse_restart_requirement_survives_separate_setup_runs(tmp_path, monkeypatch):
+def test_failed_restart_is_retried_on_next_setup(tmp_path, monkeypatch):
+    monkeypatch.setattr(quick_local, "find_available_port", lambda **_kwargs: 1940)
     monkeypatch.setattr(quick_local, "server_belongs_to_profile", lambda *_args: True)
     paths = quick_local.managed_paths(tmp_path)
     paths.root.mkdir(parents=True)
@@ -481,13 +516,15 @@ def test_reuse_restart_requirement_survives_separate_setup_runs(tmp_path, monkey
     def provision_again():
         setup = quick_local.QuickLocalSetup(health_check=lambda _endpoint: (True, ""))
         monkeypatch.setattr(setup, "_ensure_openviking_installed", lambda _paths: False)
+        monkeypatch.setattr(setup, "_validate_generated_config", lambda **_kwargs: None)
+        monkeypatch.setattr(setup, "_start_managed_server",
+                            MagicMock(side_effect=quick_local.QuickLocalSetupError("restart failed")))
         return setup.provision(hermes_home=tmp_path)
 
-    first = provision_again()
-    second = provision_again()
-
-    assert first.server_restart_required is True
-    assert second.server_restart_required is True
+    with pytest.raises(quick_local.QuickLocalSetupError, match="restart failed"):
+        provision_again()
+    with pytest.raises(quick_local.QuickLocalSetupError, match="restart failed"):
+        provision_again()
     assert paths.restart_required_marker.is_file()
 
 
@@ -509,7 +546,7 @@ def test_fresh_provision_validates_before_writing_active_config(tmp_path, monkey
             "api_base": "https://llm.example/v1",
         },
     )
-    ready = MagicMock()
+    ready = MagicMock(return_value="http://127.0.0.1:1937")
     monkeypatch.setattr(setup, "_start_managed_server", ready)
     monkeypatch.setattr(setup, "_ensure_openviking_installed", lambda _paths: True)
     monkeypatch.setattr(quick_local, "find_available_port", lambda **_kwargs: 1937)
@@ -682,6 +719,15 @@ def test_preferred_configured_port_is_reused_when_available(monkeypatch):
     bound = []
 
     class FakeSocket:
+        def settimeout(self, timeout):
+            pass
+
+        def connect_ex(self, address):
+            return 1
+
+        def setsockopt(self, *args):
+            pass
+
         def __enter__(self):
             return self
 
@@ -795,7 +841,7 @@ def test_current_installer_uses_pm_and_private_root(tmp_path, monkeypatch):
     assert engine._ensure_openviking_installed(paths)
     install.assert_called_once_with(
         "openviking-local",
-        quick_local.INSTALL_REQUIREMENTS,
+        importlib.import_module(quick_local.__package__ + ".local_packages").install_requirements(),
         "openviking-server",
         root=paths.runtime,
         explicit=True,
@@ -882,7 +928,7 @@ def test_backup_skips_managed_profile_but_keeps_external_file(tmp_path, monkeypa
     assert provider.backup_paths() == [str(linked)]
 
 
-def test_running_managed_server_requires_restart_after_config_change(tmp_path, monkeypatch, caplog):
+def test_running_managed_server_recovers_after_config_change(tmp_path, monkeypatch):
     paths, _cfg = _saved_local(tmp_path)
     quick_local._mark_server_restart_required(paths)
     provider = OpenVikingMemoryProvider()
@@ -894,8 +940,10 @@ def test_running_managed_server_requires_restart_after_config_change(tmp_path, m
     provider._env_refresh_enabled = True
     build = MagicMock()
     monkeypatch.setattr(provider, "_build_client", build)
+    restart = MagicMock()
+    monkeypatch.setattr(provider, "_handle_runtime_openviking_unreachable", restart)
     assert provider._ensure_client() is None
-    assert "needs a server restart" in caplog.text
+    restart.assert_called_once()
     build.assert_not_called()
     assert paths.restart_required_marker.exists()
 
@@ -1026,18 +1074,22 @@ def test_failed_data_validation_does_not_activate_configuration(tmp_path, monkey
 def test_managed_start_keeps_only_a_ready_process(tmp_path, monkeypatch, healthy):
     paths, _cfg = _saved_local(tmp_path)
     process = MagicMock()
-    monkeypatch.setattr(quick_local, "_start_validation_server", lambda *_args: process)
-    monkeypatch.setattr(quick_local, "_wait_for_health", lambda *_args, **_kwargs: healthy)
-    stop = MagicMock(return_value=True)
-    monkeypatch.setattr(quick_local, "_stop_process", stop)
+    lifecycle = importlib.import_module(quick_local.__package__ + ".local_server")
+    server = MagicMock()
+    started = lifecycle.StartedServer("http://127.0.0.1:1938", process, False)
+    server.start.return_value = started
+    if healthy:
+        server.wait_ready.return_value = started
+    else:
+        server.wait_ready.side_effect = quick_local.QuickLocalSetupError("did not become ready")
+    monkeypatch.setattr(lifecycle, "LocalServer", lambda _home: server)
     engine = quick_local.QuickLocalSetup(health_check=lambda _url: (True, ""))
     if healthy:
         engine._start_managed_server(paths, "http://127.0.0.1:1938")
-        stop.assert_not_called()
     else:
         with pytest.raises(quick_local.QuickLocalSetupError, match="did not become ready"):
             engine._start_managed_server(paths, "http://127.0.0.1:1938")
-        stop.assert_called_once_with(process)
+    server.wait_ready.assert_called_once_with(started, engine._health_check)
 
 
 def test_managed_initialize_preserves_cli_startup_callbacks(tmp_path, monkeypatch):

@@ -1515,12 +1515,12 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
     # -- connection lifecycle ------------------------------------------------
 
-    def _start_runtime_openviking_waiter(self, *, endpoint: str, status_callback=None, warning_callback=None) -> None:
+    def _start_runtime_openviking_waiter(self, *, endpoint: str, managed_start=None, status_callback=None, warning_callback=None) -> None:
         # Caller holds _runtime_start_lock and reserved ownership via _runtime_start_pending.
         if self._runtime_start_thread and self._runtime_start_thread.is_alive():
             return
         self._runtime_start_thread = spawn_context_thread(
-            lambda: self._finish_runtime_openviking_start(endpoint=endpoint, status_callback=status_callback, warning_callback=warning_callback),
+            lambda: self._finish_runtime_openviking_start(endpoint=endpoint, managed_start=managed_start, status_callback=status_callback, warning_callback=warning_callback),
             name="openviking-runtime-start")
         self._runtime_start_thread.start()
 
@@ -1545,13 +1545,22 @@ class OpenVikingMemoryProvider(MemoryProvider):
                     snapshot = self._conn_snapshot or self._settings_tuple()
                 # Recovery may use only the matching endpoint and identity. Do
                 # not persist credentials, or use the same marker after A -> B -> A.
-                key = hashlib.sha256(json.dumps(snapshot).encode()).hexdigest()
+                recovery_snapshot = snapshot
+                config, _env = self._profile_config_and_env()
+                if config.get("deployment") == quick_local.DEPLOYMENT:
+                    # The managed workspace remains the same when a foreign
+                    # listener forces a port change. Keep recovery tied to that
+                    # workspace and tenant, while marker_id still separates
+                    # concurrent connection generations.
+                    paths = quick_local.managed_paths(Path(self._hermes_home or get_hermes_home()))
+                    recovery_snapshot = (quick_local.DEPLOYMENT, str(paths.workspace), *snapshot[2:])
+                key = hashlib.sha256(json.dumps(recovery_snapshot).encode()).hexdigest()
                 if self._commit_scope is not None:
                     self._turn_count = 0
                 self._commit_scope = _CommitScope(self._client, key)
             return self._commit_scope
 
-    def _finish_runtime_openviking_start(self, *, endpoint: Optional[str] = None, status_callback=None, warning_callback=None) -> None:
+    def _finish_runtime_openviking_start(self, *, endpoint: Optional[str] = None, managed_start=None, status_callback=None, warning_callback=None) -> None:
         endpoint = endpoint or self._endpoint
 
         def stale() -> bool:
@@ -1560,7 +1569,26 @@ class OpenVikingMemoryProvider(MemoryProvider):
         config, _env = self._profile_config_and_env()
         managed = config.get("deployment") == quick_local.DEPLOYMENT
         timeout = quick_local._HEALTH_TIMEOUT_SECONDS if managed else _LOCAL_OPENVIKING_AUTOSTART_TIMEOUT
-        if not _wait_for_openviking_health(endpoint, timeout_seconds=timeout, should_stop=stale):
+        if managed_start is not None:
+            from .local_server import LocalServer
+            server = LocalServer(Path(self._hermes_home or get_hermes_home()))
+            try:
+                ready = server.wait_ready(managed_start,
+                                          _validate_openviking_reachability,
+                                          should_stop=stale, timeout=timeout)
+            except Exception as exc:
+                if not stale():
+                    _emit_runtime(f"Quick Local startup failed ({type(exc).__name__}). Review the server log; Hermes will retry on a later turn.", warning_callback)
+                return
+            if ready is None or stale():
+                return
+            if ready.endpoint != endpoint:
+                with self._client_refresh_lock:
+                    if stale():
+                        return
+                    self._endpoint = ready.endpoint
+                    endpoint = ready.endpoint
+        elif not _wait_for_openviking_health(endpoint, timeout_seconds=timeout, should_stop=stale):
             if not stale():
                 _emit_runtime(_runtime_openviking_timeout_message(endpoint, timeout), warning_callback)
             return
@@ -1575,7 +1603,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
                     paths = quick_local.managed_paths(Path(self._hermes_home or get_hermes_home()))
                     healthy = quick_local.server_belongs_to_profile(paths, endpoint)
                     if healthy:
-                        healthy = quick_local.clear_server_restart_required(paths.server_config)
+                        healthy = not paths.restart_required_marker.is_file()
                 if stale():
                     return
                 warning_message = "" if healthy else f"OpenViking server at {endpoint} is still not reachable after auto-start. {_RETRY_LATER}"
@@ -1606,19 +1634,23 @@ class OpenVikingMemoryProvider(MemoryProvider):
             if self._shutting_down or self._runtime_start_pending or (self._runtime_start_thread and self._runtime_start_thread.is_alive()):
                 return
             self._runtime_start_pending = True
-            config, _env = self._profile_config_and_env()
-            if config.get("deployment") == quick_local.DEPLOYMENT:
-                paths = quick_local.managed_paths(Path(self._hermes_home or get_hermes_home()))
-                try:
-                    quick_local.connection_config(config, paths.root.parent)
-                    quick_local._start_validation_server(endpoint, paths.server_config, paths.root.parent, paths.server_command)
-                except quick_local.QuickLocalSetupError as exc:
-                    start_state, start_message = _LOCAL_SERVER_FAILED, str(exc)
+            managed_start = None
+            try:
+                config, _env = self._profile_config_and_env()
+                if config.get("deployment") == quick_local.DEPLOYMENT:
+                    from .local_server import LocalServer
+                    server = LocalServer(Path(self._hermes_home or get_hermes_home()))
+                    managed_start = server.start()
+                    settings = self._resolve_bound_connection_settings(config, _env)
+                    self._endpoint, self._api_key, self._account, self._user, self._agent = (settings[k] for k in _CONNECTION_KEYS)
+                    endpoint = self._endpoint
+                    start_state, start_message = _LOCAL_SERVER_STARTED, f"Starting Quick Local at {endpoint}. Logs: {server.paths.root.parent / _OPENVIKING_SERVER_LOG_RELATIVE_PATH}"
                 else:
-                    start_state, start_message = _LOCAL_SERVER_STARTED, f"Started Quick Local at {endpoint}. Logs: {paths.root.parent / _OPENVIKING_SERVER_LOG_RELATIVE_PATH}"
-            else:
-                start_state, start_message = _start_local_openviking_server(endpoint)
-            if start_state != _LOCAL_SERVER_STARTED:
+                    start_state, start_message = _start_local_openviking_server(endpoint)
+            except Exception as exc:
+                logger.debug("OpenViking startup failed", exc_info=True)
+                start_state, start_message = _LOCAL_SERVER_FAILED, f"Startup failed ({type(exc).__name__}). Review the server log."
+            finally:
                 self._runtime_start_pending = False
 
         if start_state != _LOCAL_SERVER_STARTED:
@@ -1628,7 +1660,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         with self._runtime_start_lock:
             self._runtime_start_pending = False
             if not self._shutting_down:
-                self._start_runtime_openviking_waiter(endpoint=endpoint, status_callback=status_callback, warning_callback=warning_callback)
+                self._start_runtime_openviking_waiter(endpoint=endpoint, managed_start=managed_start, status_callback=status_callback, warning_callback=warning_callback)
 
     def initialize(self, session_id: str, **kwargs) -> None:
         is_cli = kwargs.get("platform") == "cli"
@@ -1741,11 +1773,11 @@ class OpenVikingMemoryProvider(MemoryProvider):
         managed = config.get("deployment") == quick_local.DEPLOYMENT
         if managed:
             paths = quick_local.managed_paths(Path(self._hermes_home or get_hermes_home()))
-            if paths.restart_required_marker.is_file() and _local_openviking_port_is_open(*_local_openviking_bind(settings["endpoint"])):
+            if paths.restart_required_marker.is_file():
+                self._endpoint, self._api_key, self._account, self._user, self._agent = (settings[k] for k in _CONNECTION_KEYS)
                 if not self._in_cooldown(("quick-local-restart",)):
-                    logger.warning("Quick Local needs a server restart to use the saved model or runtime. Stop the Quick Local server, then start a new Hermes session.")
-                self._failed_refresh = (("quick-local-restart",), time.monotonic())
-                self._client = None
+                    self._handle_runtime_openviking_unreachable(status_callback=status_callback, warning_callback=warning_callback)
+                    self._failed_refresh = (("quick-local-restart",), time.monotonic())
                 return None
         settings_key = tuple(settings[k] for k in _CONNECTION_KEYS)
         if settings_key == self._settings_tuple():
@@ -1770,17 +1802,17 @@ class OpenVikingMemoryProvider(MemoryProvider):
         health_state, health_message = _classify_runtime_openviking_health(client, settings_key[0])
         if health_state == "healthy":
             if managed and not quick_local.server_belongs_to_profile(paths, settings_key[0]):
-                if not self._in_cooldown(settings_key):
-                    logger.warning("Quick Local could not verify ownership of its saved endpoint. Run hermes memory setup openviking again.")
                 self._failed_refresh = (settings_key, time.monotonic())
-                self._client = None
+                self._handle_runtime_openviking_unreachable(status_callback=status_callback, warning_callback=warning_callback)
                 return None
             if managed:
                 quick_local.clear_server_restart_required(paths.server_config)
             self._publish_client(client, settings_key[0])
             return self._client
         self._failed_refresh = (settings_key, time.monotonic())
-        if health_state == "responded":
+        if managed:
+            self._handle_runtime_openviking_unreachable(status_callback=status_callback, warning_callback=warning_callback)
+        elif health_state == "responded":
             logger.warning(
                 "%s OpenViking memory is temporarily unavailable; Hermes will retry on a later access (after cooldown) or when the config changes.",
                 health_message,

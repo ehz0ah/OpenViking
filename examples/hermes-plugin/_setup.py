@@ -386,7 +386,8 @@ def _mirror_manual_config_to_openviking_store(*, prompt, select, cancelled, valu
         return path
 
 
-def _run_quick_local_setup(*, config: dict, provider_config: dict, env_path: Path) -> bool:
+def _run_quick_local_setup(*, config: dict, provider_config: dict, env_path: Path,
+                           select=None, cancelled=None) -> bool:
     ov = _ov()
 
     def report_progress(event: quick_local.QuickLocalProgress) -> None:
@@ -404,6 +405,21 @@ def _run_quick_local_setup(*, config: dict, provider_config: dict, env_path: Pat
 
     try:
         result = setup.provision(hermes_home=env_path.parent, preflight=preflight)
+    except quick_local.SourceBuildRequired as exc:
+        _say(str(exc))
+        if select is None or select(
+            "  Allow a source build?",
+            [("Cancel", "connect to a separate OpenViking server instead"),
+             ("Build locally", "requires native build tools; can take several minutes")],
+            default=0, cancel_returns=cancelled,
+        ) != 1:
+            return False
+        setup.allow_source_build = True
+        try:
+            result = setup.provision(hermes_home=env_path.parent, preflight=preflight)
+        except quick_local.QuickLocalSetupError as retry_exc:
+            _say(f"Quick Local setup failed: {retry_exc}")
+            return False
     except quick_local.QuickLocalSetupError as exc:
         _say(f"Quick Local setup failed: {exc}")
         return False
@@ -417,25 +433,11 @@ def _run_quick_local_setup(*, config: dict, provider_config: dict, env_path: Pat
     provider_config.update(
         deployment=quick_local.DEPLOYMENT,
     )
-    if result.server_restart_required:
-        print("\n  Quick Local restart required")
-        _say(
-            "The running OpenViking server must restart to use the updated "
-            "runtime or Hermes LLM settings."
-        )
-        _say(f"Stop the Quick Local server at {result.endpoint}, then start Hermes again.")
-        _say(
-            "Hermes will restart it with the updated runtime and settings "
-            "when memory is first used."
-        )
-        _say(f"Config file: {result.paths.ovcli_config}")
-        print()
-    else:
-        action = "Reused" if result.reused else "Configured"
-        _print_openviking_ready(
-            f"{action} Quick Local at {result.endpoint}.",
-            result.paths.ovcli_config,
-        )
+    action = "Reused" if result.reused else "Configured"
+    _print_openviking_ready(
+        f"{action} Quick Local at {result.endpoint}.",
+        result.paths.ovcli_config,
+    )
     return True
 
 
@@ -449,7 +451,8 @@ def _run_create_profile_setup(*, prompt, select, cancelled, config: dict, provid
         return _SETUP_CANCELLED
 
     if source_choice == 2:
-        return _run_quick_local_setup(config=config, provider_config=provider_config, env_path=env_path)
+        return _run_quick_local_setup(config=config, provider_config=provider_config, env_path=env_path,
+                                     select=select, cancelled=cancelled)
 
     values = _prompt_manual_connection_values(prompt, select, cancelled, service=(source_choice == 0))
     if values is _SETUP_CANCELLED:

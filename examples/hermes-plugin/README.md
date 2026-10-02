@@ -92,11 +92,11 @@ not exist.
 
 For a new connection, choose **OpenViking Service**, **Custom**, or **Quick Local**.
 
-Quick Local installs a compatible OpenViking 0.4.x server (0.4.22 or newer) in a
-private runtime. It uses
+Quick Local installs OpenViking 0.4.22 in a private runtime. It uses
 `bge-small-zh-v1.5-f16` for local embeddings and copies the configured Hermes LLM
-settings for memory extraction. The LLM must use a static API key and an
-OpenAI-compatible or Anthropic-compatible API. OAuth and cloud-native
+settings for memory extraction. The LLM must use a static API key or Hermes's
+local llama.cpp server, with an OpenAI-compatible or Anthropic-compatible API.
+OAuth and cloud-native
 credentials cannot be copied; use Custom for those deployments.
 
 Quick Local stores its runtime, data, model cache, and private configuration in
@@ -105,12 +105,30 @@ running so the first Hermes turn can use memory. On later starts, Hermes starts
 the server in the background if it has stopped. The embedding model downloads once, about
 46 MiB. The LLM can still use a remote API. Server logs are in
 `$HERMES_HOME/logs/openviking-server.log`.
-The first installation needs network access and C/C++ build tools if a compatible
-local-embedding wheel is unavailable.
+The first installation needs network access. It downloads prebuilt packages
+with pinned hashes on macOS 14+ (Apple Silicon), Linux with glibc 2.31+
+(x86-64 or ARM64), and Windows x86-64. Setup asks before a source build on
+other platforms. A source build needs native development tools and can take
+several minutes. You can choose Custom instead and use a separate server.
 
-Run setup again after changing the Hermes model or API key. If the server is
-already running, setup reports that it needs a restart. Stop that Quick Local
-server, then start a new Hermes session. Hermes starts it with the saved settings.
+Run setup again after changing the Hermes model or API key. Setup validates
+the new settings and restarts this profile's server. Data and the model cache
+are retained. Each profile has its own server and port; Quick Local moves to
+a free port if another service takes its saved port.
+
+The server stays running after Hermes exits. Use these commands in the same
+Hermes profile to control it:
+
+```bash
+hermes openviking local status
+hermes openviking local stop
+hermes openviking local start
+hermes openviking local restart
+```
+
+Stopping the server retains its data. Hermes starts it again when memory is
+next used. These commands and Quick Local setup require the external provider
+to be active; a bundled copy still takes precedence where present.
 Cloud and Custom connections retain their existing behavior.
 
 Setup first asks how the Hermes instance is used:

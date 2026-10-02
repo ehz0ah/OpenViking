@@ -7,6 +7,7 @@ needed to produce a ready-to-link OpenViking CLI profile.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import secrets
@@ -31,7 +32,6 @@ EMBEDDING_DIMENSION = 512
 OPENVIKING_REQUIREMENT = "openviking[local-embed]>=0.4.22,<0.5"
 # Later LiteLLM releases exclude Python 3.14. OpenViking supports this version.
 # This restriction applies only to the private server, never Hermes's dependencies.
-INSTALL_REQUIREMENTS = [OPENVIKING_REQUIREMENT, 'litellm==1.83.7; python_version >= "3.14"']
 
 _OPENVIKING_REQUIREMENT = Requirement(OPENVIKING_REQUIREMENT)
 _OPENVIKING_VERSION_SPECIFIER = _OPENVIKING_REQUIREMENT.specifier
@@ -81,24 +81,24 @@ class QuickLocalPaths:
     def runtime_python(self) -> Path:
         scripts = "Scripts" if os.name == "nt" else "bin"
         executable = "python.exe" if os.name == "nt" else "python"
-        try:
+        if _pm_available():
             from pm.operations import environment_python
-        except ImportError:  # Hermes v2026.9.24 uses the earlier uv installer.
-            selected = None
-        else:
+
             selected = environment_python("openviking-local", root=self.runtime)
+        else:
+            selected = None
         return selected or self.runtime / scripts / executable
 
     @property
     def server_command(self) -> Path:
         scripts = "Scripts" if os.name == "nt" else "bin"
         executable = "openviking-server.exe" if os.name == "nt" else "openviking-server"
-        try:
+        if _pm_available():
             from pm.operations import python_tool
-        except ImportError:
-            selected = None
-        else:
+
             selected = python_tool("openviking-local", "openviking-server", root=self.runtime)
+        else:
+            selected = None
         return selected or self.runtime / scripts / executable
 
     @property
@@ -122,6 +122,10 @@ class QuickLocalSetupResult:
 
 class QuickLocalSetupError(RuntimeError):
     """Quick Local could not finish without partially activating it."""
+
+
+class SourceBuildRequired(QuickLocalSetupError):
+    """No reviewed binary matches this platform; ask before compiling."""
 
 
 ProgressReporter = Callable[[QuickLocalProgress], None]
@@ -239,7 +243,19 @@ def resolve_hermes_vlm_config() -> dict[str, Any]:
         raise QuickLocalSetupError(
             "Hermes' LLM provider did not resolve reusable static credentials."
         )
-    if not _has_copyable_static_credentials(provider, source, api_key):
+    key_env = _clean_value(model_config.get("key_env") or model_config.get("api_key_env")).lower()
+    local_runtime = (
+        provider == "custom"
+        and source == "local-runtime"
+        and isinstance(raw_api_key, str)
+        and bool(api_key)
+        and not api_key.startswith("sk-ant-oat")
+        and urlparse(api_base).hostname in {"localhost", "127.0.0.1", "::1"}
+    )
+    declared_key = bool(key_env and source in {key_env, f"env:{key_env}"})
+    if not (
+        local_runtime or declared_key or _has_copyable_static_credentials(provider, source, api_key)
+    ):
         raise QuickLocalSetupError(
             "Hermes is using refreshed OAuth, cloud-native, or external-process "
             "credentials that cannot be copied safely into OpenViking. Configure "
@@ -291,9 +307,11 @@ class QuickLocalSetup:
         *,
         health_check: HealthCheck,
         progress: Optional[ProgressReporter] = None,
+        allow_source_build: bool = False,
     ) -> None:
         self._health_check = health_check
         self._progress = progress or (lambda _event: None)
+        self.allow_source_build = allow_source_build
 
     def preflight(self, hermes_home: Path) -> QuickLocalPreflight:
         self._emit(QuickLocalStage.PREFLIGHT, "Checking local requirements...")
@@ -318,7 +336,9 @@ class QuickLocalSetup:
         except QuickLocalSetupError:
             raise
         except Exception as exc:
-            raise QuickLocalSetupError(f"Quick Local setup failed: {exc}") from exc
+            raise QuickLocalSetupError(
+                f"Could not prepare Quick Local ({type(exc).__name__}). Review the server log and retry."
+            ) from exc
 
     def _provision(
         self,
@@ -343,20 +363,30 @@ class QuickLocalSetup:
                 )
             server_config = build_server_config(preflight.paths, vlm, port=port)
             config_changed = not _stored_server_config_matches(preflight.paths, server_config)
-            if runtime_changed or config_changed:
-                _mark_server_restart_required(preflight.paths)
-            if config_changed:
-                atomic_json_write(
-                    preflight.paths.server_config,
-                    server_config,
-                    mode=0o600,
+            if (
+                runtime_changed
+                or config_changed
+                or preflight.paths.restart_required_marker.is_file()
+            ):
+                # Validate in disposable storage before changing the live service.
+                validation_port = find_available_port()
+                if validation_port is None:
+                    raise QuickLocalSetupError(
+                        "No free port is available to validate updated settings."
+                    )
+                self._validate_generated_config(
+                    paths=preflight.paths,
+                    endpoint=f"http://127.0.0.1:{validation_port}",
+                    server_config=server_config,
                 )
-                _write_ovcli_profile(preflight.paths.ovcli_config, reusable_endpoint, server_config)
+                from .local_server import LocalServer
+
+                LocalServer(hermes_home).configure(server_config, runtime_changed=runtime_changed)
                 self._emit(
                     QuickLocalStage.WRITE_CONFIG,
-                    "Updated Quick Local's saved Hermes LLM settings; the running "
-                    "server must be restarted before it can use them.",
+                    "Restarting Quick Local with the updated Hermes LLM settings...",
                 )
+                reusable_endpoint = self._start_managed_server(preflight.paths, reusable_endpoint)
             self._emit(
                 QuickLocalStage.COMPLETE,
                 "Existing Quick Local server is reachable; reusing it.",
@@ -365,7 +395,6 @@ class QuickLocalSetup:
                 paths=preflight.paths,
                 endpoint=reusable_endpoint,
                 reused=True,
-                server_restart_required=preflight.paths.restart_required_marker.is_file(),
             )
 
         port = find_available_port(preferred_endpoint=_configured_endpoint(preflight.paths))
@@ -390,7 +419,7 @@ class QuickLocalSetup:
         preflight.paths.workspace.mkdir(parents=True, exist_ok=True)
         atomic_json_write(preflight.paths.server_config, server_config, mode=0o600)
         _write_ovcli_profile(preflight.paths.ovcli_config, endpoint, server_config)
-        self._start_managed_server(preflight.paths, endpoint)
+        endpoint = self._start_managed_server(preflight.paths, endpoint)
         self._emit(
             QuickLocalStage.WRITE_CONFIG,
             f"Saved Quick Local configuration to {preflight.paths.server_config}.",
@@ -414,15 +443,21 @@ class QuickLocalSetup:
             f"Installing {OPENVIKING_REQUIREMENT}...",
         )
         _prepare_private_directory(paths.root)
-        try:
+        from .local_packages import install_requirements
+
+        requirements = install_requirements(allow_source_build=self.allow_source_build)
+        if self.allow_source_build:
+            self._emit(
+                QuickLocalStage.INSTALL_OPENVIKING,
+                "Source builds are allowed. Native compilation can take several minutes.",
+            )
+        if _pm_available():
             from pm.client import ensure_python_tool
-        except ImportError:  # Before Hermes PM, retain its supported installer.
-            self._install_with_uv(paths)
-        else:
+
             try:
                 ensure_python_tool(
                     "openviking-local",
-                    INSTALL_REQUIREMENTS,
+                    requirements,
                     "openviking-server",
                     root=paths.runtime,
                     explicit=True,
@@ -432,13 +467,15 @@ class QuickLocalSetup:
                 raise QuickLocalSetupError(
                     "Could not install the private OpenViking runtime. Review the installer output."
                 ) from exc
+        else:  # Genuine pre-PM Hermes only; never fall back on a broken PM import.
+            self._install_with_uv(paths, requirements)
         if not openviking_install_satisfies_requirement(paths):
             raise QuickLocalSetupError(
                 "Could not install a compatible OpenViking local embedding runtime."
             )
         return True
 
-    def _install_with_uv(self, paths: QuickLocalPaths) -> None:
+    def _install_with_uv(self, paths: QuickLocalPaths, requirements: list[str]) -> None:
         from hermes_cli.managed_uv import ensure_uv
 
         uv = ensure_uv()
@@ -457,7 +494,7 @@ class QuickLocalSetup:
                     "install",
                     "--python",
                     str(paths.runtime_python),
-                    *INSTALL_REQUIREMENTS,
+                    *requirements,
                 ],
                 1800,
             )
@@ -542,26 +579,15 @@ class QuickLocalSetup:
                         raise QuickLocalSetupError(message)
                     primary_error.add_note(message)
 
-    def _start_managed_server(self, paths: QuickLocalPaths, endpoint: str) -> None:
+    def _start_managed_server(self, paths: QuickLocalPaths, endpoint: str) -> str:
         """Leave a validated service ready for the first turn and reserve its port."""
         self._emit(QuickLocalStage.VALIDATE, "Starting this profile's OpenViking server...")
-        process = _start_validation_server(
-            endpoint, paths.server_config, paths.root.parent, paths.server_command
-        )
+        from .local_server import LocalServer
 
-        def owned_health(url):
-            healthy, message = self._health_check(url)
-            return healthy and server_belongs_to_profile(paths, url), message
-
-        try:
-            if not _wait_for_health(endpoint, owned_health, process=process):
-                raise QuickLocalSetupError(
-                    "Quick Local server did not become ready. Review the server log and retry."
-                )
-        except BaseException as exc:
-            if not _stop_process(process):
-                exc.add_note("The newly started Quick Local server could not be stopped.")
-            raise
+        server = LocalServer(paths.root.parent)
+        started = server.start()
+        ready = server.wait_ready(started, self._health_check)
+        return ready.endpoint
 
     def _emit(self, stage: QuickLocalStage, message: str) -> None:
         self._progress(QuickLocalProgress(stage=stage, message=message))
@@ -582,11 +608,16 @@ def openviking_install_satisfies_requirement(paths: QuickLocalPaths) -> bool:
             text=True,
             check=False,
             stdin=subprocess.DEVNULL,
-            timeout=15,
+            timeout=120,
         )
         if result.returncode != 0:
             return False
         version = Version(result.stdout.strip())
+    except subprocess.TimeoutExpired as exc:
+        # A slow cold native import is not evidence of a missing installation.
+        raise QuickLocalSetupError(
+            "Quick Local's runtime check timed out. Retry setup; the runtime was not reinstalled."
+        ) from exc
     except (InvalidVersion, OSError, subprocess.SubprocessError):
         return False
     return version in _OPENVIKING_VERSION_SPECIFIER
@@ -614,7 +645,19 @@ def find_available_port(
 def _can_bind_local_port(host: str, port: int) -> bool:
     family = socket.AF_INET6 if ":" in host else socket.AF_INET
     try:
+        # Some Unix kernels allow a specific-address bind beside a wildcard
+        # listener with SO_REUSEADDR. Never take an already reachable port.
+        with socket.socket(family, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.2)
+            if probe.connect_ex((host, port)) == 0:
+                return False
         with socket.socket(family, socket.SOCK_STREAM) as candidate:
+            if os.name == "nt":
+                candidate.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                # Match Uvicorn: permit restart after closed connections remain
+                # in TIME_WAIT, but never bind beside a listening server.
+                candidate.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             candidate.bind((host, port))
         return True
     except OSError:
@@ -733,6 +776,7 @@ def _write_ovcli_profile(path: Path, endpoint: str, server_config: Mapping[str, 
 def connection_config(provider_config: Mapping[str, Any], hermes_home: Path) -> dict[str, Any]:
     """Resolve only this profile's managed files, including after profile import."""
     paths = managed_paths(hermes_home)
+    repair_private_paths(paths)
     endpoint = _configured_endpoint(paths)
     if endpoint is None:
         raise QuickLocalSetupError(
@@ -778,8 +822,16 @@ def _start_validation_server(
     if not log_path.exists():
         log_path.touch(mode=0o600)
     log_path.chmod(0o600)
-    child_env = os.environ.copy()
+    from tools.environments import local as subprocess_env
+
+    if hasattr(subprocess_env, "served_profile_child_env"):
+        child_env = subprocess_env.served_profile_child_env(target_home=hermes_home)
+    else:
+        child_env = subprocess_env.hermes_subprocess_env()
+        child_env["HERMES_HOME"] = str(hermes_home)
     child_env.pop("PYTHONPATH", None)
+    child_env.pop("PYTHONHOME", None)
+    child_env.pop("VIRTUAL_ENV", None)
     from hermes_cli._subprocess_compat import windows_detach_popen_kwargs
 
     popen_kwargs: dict[str, Any] = windows_detach_popen_kwargs()
@@ -918,9 +970,31 @@ def _stored_server_config_matches(
 
 
 def _prepare_private_directory(path: Path) -> None:
+    if path.is_symlink():
+        raise QuickLocalSetupError("Quick Local private directories must belong to this profile.")
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     if os.name != "nt":
         path.chmod(0o700)
+
+
+def repair_private_paths(paths: QuickLocalPaths) -> None:
+    """Backup/import may restore permissive modes on plugin-owned files."""
+    _prepare_private_directory(paths.root)
+    for path in (
+        paths.server_config,
+        paths.ovcli_config,
+        paths.restart_required_marker,
+        paths.root / "server-process.json",
+        paths.root / "server.lock",
+    ):
+        if path.is_symlink():
+            raise QuickLocalSetupError("Quick Local private files must belong to this profile.")
+        if path.exists() and os.name != "nt":
+            path.chmod(0o600)
+
+
+def _pm_available() -> bool:
+    return importlib.util.find_spec("pm") is not None
 
 
 def _server_log_path(hermes_home: Path) -> Path:
