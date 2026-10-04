@@ -75,6 +75,26 @@ def test_official_static_responses_route_can_use_chat_completions(ql, monkeypatc
     assert vlm["provider"] == "openai" and vlm["api_base"] == base
 
 
+@pytest.mark.parametrize("source", ["direct-alias", "custom_provider:official", "pool:official"])
+@pytest.mark.parametrize("base", ["https://api.openai.com/v1", "https://api.x.ai/v1"])
+def test_official_custom_responses_routes_preserve_static_key_gate(ql, monkeypatch, source, base):
+    vlm = resolve(ql, monkeypatch, source=source, api_mode="codex_responses", base_url=base)
+    assert vlm["provider"] == "openai" and vlm["api_base"] == base
+    assert vlm["api_key"] == "static-key"
+
+
+@pytest.mark.parametrize("provider,source,key", [
+    ("openai-codex", "oauth", "refreshed-token"),
+    ("xai", "oauth", "refreshed-token"),
+    ("custom", "key_cmd", lambda: pytest.fail("Must not execute credential commands")),
+    ("custom", "oauth", "refreshed-token"),
+])
+def test_official_host_does_not_bypass_credential_classification(ql, monkeypatch, provider, source, key):
+    with pytest.raises(ql.QuickLocalSetupError, match="cannot be copied safely"):
+        resolve(ql, monkeypatch, provider=provider, source=source, api_key=key,
+                api_mode="codex_responses", base_url="https://api.openai.com/v1")
+
+
 def test_other_responses_routes_are_not_guessed(ql, monkeypatch):
     with pytest.raises(ql.QuickLocalSetupError, match="transport is not supported"):
         resolve(ql, monkeypatch, api_mode="codex_responses", base_url="https://proxy.example/v1")

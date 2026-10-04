@@ -18,6 +18,22 @@ def _run(args):
             print("Quick Local stopped." if server.stop() else "Quick Local is already stopped.")
             return
         if args.local_action in {"start", "restart"}:
+            from hermes_cli.config import load_config_readonly
+
+            from .quick_local import DEPLOYMENT
+
+            memory = load_config_readonly().get("memory", {})
+            settings = memory.get("openviking", {}) if isinstance(memory, dict) else {}
+            if (
+                not isinstance(memory, dict)
+                or memory.get("provider") != "openviking"
+                or not isinstance(settings, dict)
+                or settings.get("deployment") != DEPLOYMENT
+            ):
+                raise QuickLocalSetupError(
+                    "This profile is not using Quick Local. Run "
+                    "hermes memory setup openviking to select Quick Local."
+                )
             started = server.start(restart=args.local_action == "restart")
             print(f"Starting Quick Local at {started.endpoint}...")
             server.wait_ready(

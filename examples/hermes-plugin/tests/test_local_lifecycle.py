@@ -97,6 +97,68 @@ def ready(server):
     return server.wait_ready(server.start(), lambda _url: (True, ""), timeout=20)
 
 
+@pytest.mark.parametrize("action", ["start", "restart"])
+@pytest.mark.parametrize("memory", [
+    {"provider": "openviking", "openviking": {"deployment": "cloud"}},
+    {"provider": "openviking", "openviking": {}},
+    {"provider": "honcho", "openviking": {"deployment": "quick_local"}},
+])
+def test_cli_refuses_start_when_quick_local_is_not_selected(servers, modules, monkeypatch, capsys, action, memory):
+    import json
+    from argparse import Namespace
+
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    server = servers("inactive-cli")
+    home = server.paths.root.parent
+    config = home / "config.yaml"
+    config.write_text(json.dumps({"memory": memory}), encoding="utf-8")
+    before = config.read_bytes()
+    cli = importlib.import_module(modules[3].__package__ + ".cli")
+    monkeypatch.setattr(cli, "get_hermes_home", lambda: home)
+    token = set_hermes_home_override(home)
+    try:
+        with pytest.raises(SystemExit) as caught:
+            cli._run(Namespace(local_action=action))
+        assert caught.value.code == 1
+        assert "not using Quick Local" in capsys.readouterr().out
+        assert server.status()["state"] == "stopped"
+        assert config.read_bytes() == before
+    finally:
+        reset_hermes_home_override(token)
+
+
+def test_cli_controls_selected_and_retained_server(servers, modules, monkeypatch, capsys):
+    import json
+    from argparse import Namespace
+
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    server = servers("selected-cli")
+    home = server.paths.root.parent
+    config = home / "config.yaml"
+    config.write_text(json.dumps({"memory": {"provider": "openviking", "openviking": {
+        "deployment": "quick_local"}}}), encoding="utf-8")
+    cli = importlib.import_module(modules[3].__package__ + ".cli")
+    monkeypatch.setattr(cli, "get_hermes_home", lambda: home)
+    token = set_hermes_home_override(home)
+    try:
+        cli._run(Namespace(local_action="start"))
+        assert server.status()["state"] == "ready"
+        old_pid = server.status()["pid"]
+        cli._run(Namespace(local_action="restart"))
+        assert server.status()["state"] == "ready"
+        assert server.status()["pid"] != old_pid
+        config.write_text(json.dumps({"memory": {"provider": "openviking", "openviking": {
+            "deployment": "cloud"}}}), encoding="utf-8")
+        cli._run(Namespace(local_action="status"))
+        assert "Quick Local: ready" in capsys.readouterr().out
+        cli._run(Namespace(local_action="stop"))
+        assert server.status()["state"] == "stopped"
+    finally:
+        reset_hermes_home_override(token)
+
+
 def test_restart_keeps_data_and_changes_only_owned_process(servers):
     a, b = servers("a"), servers("b")
     ready(a)
@@ -601,8 +663,8 @@ def test_changed_native_pins_reinstall_an_existing_runtime(modules, monkeypatch)
 
 
 def test_legacy_install_without_uv_fails_without_repairing_hermes(modules, monkeypatch):
-    from hermes_cli import managed_uv
     import hermes_constants
+    from hermes_cli import managed_uv
 
     home, _p, _m, ql, _life, _packages = modules
     monkeypatch.setattr(hermes_constants, "get_default_hermes_root", lambda: home)

@@ -104,6 +104,9 @@ Kimi Coding retains Hermes's client attribution. Anthropic routes that need
 Bearer authentication, including MiniMax and Azure Foundry, and proxy keys
 that LiteLLM would treat as OAuth require a separately configured Custom server.
 Setup checks the copied LLM with one short completion before activation.
+It retries once for a timeout, HTTP 429, or HTTP 5xx. Other errors fail
+immediately. The message and server log identify the error without recording
+credentials or the provider's response body.
 
 Quick Local stores its runtime, data, model cache, and private configuration in
 `$HERMES_HOME/openviking/`. Setup validates it, then leaves its localhost server
@@ -143,7 +146,9 @@ is in progress, new turns are not captured until the server is ready.
 These commands and Quick Local setup require the external provider
 to be active; a bundled copy still takes precedence where present.
 Switching to Cloud or Custom stops this profile's managed server and retains
-its data. The existing Cloud and Custom connection choices remain available.
+its data. `local start` and `local restart` require Quick Local to be selected;
+`local status` and `local stop` remain available for the retained server.
+The existing Cloud and Custom connection choices remain available.
 Hermes backups include Quick Local files under the profile home; the plugin
 adds a linked `ovcli.conf` only when it is outside that home.
 

@@ -274,7 +274,7 @@ def resolve_hermes_vlm_config() -> dict[str, Any]:
     # Responses routes and third-party Responses-only endpoints stay excluded.
     if api_mode == "codex_responses" and urlparse(api_base).hostname in {
         "api.openai.com", "api.x.ai"
-    } and provider in {"openai-api", "xai"}:
+    } and provider in {"openai-api", "xai", "custom"}:
         api_mode = "chat_completions"
     if api_mode not in {"chat_completions", "anthropic_messages"}:
         raise QuickLocalSetupError(
@@ -650,17 +650,28 @@ class QuickLocalSetup:
 def _validate_vlm(paths: QuickLocalPaths, config_path: Path) -> None:
     """Check auth and transport through the exact private OV backend before activation."""
     script = """
-import json, sys
+import json, sys, time
+import httpx, openai
 from openviking.models.vlm import VLMFactory
-try:
-    config = json.load(open(sys.argv[1], encoding="utf-8"))["vlm"]
-    vlm = VLMFactory.create({**config, "timeout": 30, "max_retries": 0})
-    reply = vlm.get_completion(prompt="Reply with OK only.")
-    if not isinstance(reply, str) or not reply.strip():
-        raise ValueError("Empty completion")
-except Exception as exc:
-    print(json.dumps({"error": type(exc).__name__}))
-    sys.exit(1)
+for attempt in (1, 2):
+    try:
+        config = json.load(open(sys.argv[1], encoding="utf-8"))["vlm"]
+        vlm = VLMFactory.create({**config, "timeout": 30, "max_retries": 0})
+        reply = vlm.get_completion(prompt="Reply with OK only.")
+        if not isinstance(reply, str) or not reply.strip():
+            raise ValueError("Empty completion")
+        break
+    except Exception as exc:
+        status = getattr(exc, "status_code", None)
+        status = status if type(status) is int and 100 <= status <= 599 else None
+        timed_out = isinstance(exc, (TimeoutError, httpx.TimeoutException, openai.APITimeoutError))
+        retry = status == 429 or (status is not None and 500 <= status <= 599) or timed_out
+        if attempt == 1 and retry:
+            time.sleep(1)
+            continue
+        print(json.dumps({"error": type(exc).__name__, "status": status,
+                          "timeout": timed_out, "attempts": attempt}))
+        sys.exit(1)
 """
     try:
         result = subprocess.run(
@@ -671,19 +682,62 @@ except Exception as exc:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            errors="replace",
             timeout=90,
             check=False,
         )
         if result.returncode:
-            raise QuickLocalSetupError(
-                "The copied Hermes LLM settings failed the access check. "
-                "Check the model, API key and endpoint in Hermes, then retry. "
-                "The model must support Chat Completions or Anthropic Messages."
-            )
+            try:
+                # OV may print import diagnostics before the final result.
+                failure = json.loads(result.stdout.strip().rsplit("\n", 1)[-1])
+            except (ValueError, TypeError):
+                failure = {}
+            raise _vlm_check_failure(paths, failure)
     except subprocess.TimeoutExpired as exc:
-        raise QuickLocalSetupError(
-            "The Hermes LLM access check timed out. Check its endpoint, then retry setup."
-        ) from exc
+        raise _vlm_check_failure(paths, {
+            "error": "TimeoutExpired", "timeout": True, "attempts": 0,
+        }) from exc
+
+
+def _vlm_check_failure(paths: QuickLocalPaths, failure: Any) -> QuickLocalSetupError:
+    """Report only safe error metadata, never a response body or captured stderr."""
+    failure = failure if isinstance(failure, dict) else {}
+    name = failure.get("error")
+    if not isinstance(name, str) or not name.isascii() or not name.isidentifier() or len(name) > 80:
+        name = "UnknownError"
+    status = failure.get("status")
+    status = status if type(status) is int and 100 <= status <= 599 else None
+    timed_out = failure.get("timeout") is True
+    attempts = failure.get("attempts")
+    attempts = attempts if type(attempts) is int and 0 <= attempts <= 2 else 1
+    detail = name + (f"; HTTP {status}" if status is not None else "")
+    if timed_out:
+        message = f"The Hermes LLM access check timed out ({detail}). Retry setup or check the provider's response time."
+    else:
+        if status in {401, 403}:
+            guidance = "Check the API key and its permissions in Hermes."
+        elif status == 404:
+            guidance = "Check the model and endpoint in Hermes."
+        elif status == 429:
+            guidance = "The provider is rate-limiting requests. Wait, then retry setup."
+        elif status is not None and status >= 500:
+            guidance = "The provider reported a temporary server error. Retry setup later."
+        elif name == "APIConnectionError":
+            guidance = "Check the endpoint and network connection, then retry setup."
+        else:
+            guidance = "Check the model and endpoint. The model must support Chat Completions or Anthropic Messages."
+        message = f"The copied Hermes LLM settings failed the access check ({detail}). {guidance}"
+    log_path = _server_log_path(paths.root.parent)
+    _prepare_private_directory(log_path.parent)
+    if log_path.is_symlink():
+        raise QuickLocalSetupError("Quick Local log must belong to this profile.")
+    if not log_path.exists():
+        log_path.touch(mode=0o600)
+    if os.name != "nt":
+        log_path.chmod(0o600)
+    with log_path.open("a", encoding="utf-8") as log:
+        log.write(f"LLM access check failed: {detail}; timeout={timed_out}; attempts={attempts}\n")
+    return QuickLocalSetupError(message)
 
 
 def openviking_install_satisfies_requirement(paths: QuickLocalPaths) -> bool:

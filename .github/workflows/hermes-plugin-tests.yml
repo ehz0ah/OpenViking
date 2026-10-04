@@ -144,6 +144,7 @@ jobs:
             "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_local_lifecycle.py" \
             "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_quick_local.py" \
             "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_quick_local_routes.py" \
+            "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_quick_local_preflight.py" \
             --confcutdir="$GITHUB_WORKSPACE/examples/hermes-plugin/tests" -p no:cacheprovider -q
       - name: Install and run real Quick Local services
         run: |

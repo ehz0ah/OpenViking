@@ -140,6 +140,7 @@ def main():
     servers, providers = [], []
     evidence = {"legacy_uv": args.legacy_uv, "profiles": []}
     llm_requests = []
+    preflight_errors = []
 
     class LLMHandler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -153,6 +154,9 @@ def main():
                 self.send_error(401)
                 return
             llm_requests.append(self.path)
+            if preflight_errors:
+                self.send_error(preflight_errors.pop(0), "private provider response")
+                return
             body = json.dumps({"id": "setup-test", "object": "chat.completion", "model": "test-model",
                                "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"},
                                             "finish_reason": "stop"}],
@@ -229,6 +233,25 @@ def main():
                     evidence["llm_request_paths"] = check_llm_transports(
                         root / "transport-config", ql, server.paths.runtime_python
                     )
+                    evidence["llm_preflight"] = []
+                    for errors in ([401], [404], [429], [500], [429, 429]):
+                        preflight_errors[:] = errors
+                        count = len(llm_requests)
+                        log_path = home / "logs/openviking-server.log"
+                        log_size = log_path.stat().st_size
+                        failed = False
+                        try:
+                            ql._validate_vlm(server.paths, server.paths.server_config)
+                        except ql.QuickLocalSetupError as error:
+                            failed = True
+                            assert f"HTTP {errors[-1]}" in str(error), str(error)
+                            assert "private provider response" not in str(error)
+                        assert failed == (errors[0] in {401, 404} or len(errors) == 2)
+                        expected = 1 if errors[0] in {401, 404} else 2
+                        assert len(llm_requests) - count == expected
+                        assert "private provider response" not in log_path.read_bytes()[log_size:].decode()
+                        evidence["llm_preflight"].append({"errors": errors, "requests": expected, "failed": failed})
+                    assert not preflight_errors
                 provider.initialize("local-smoke-" + name, hermes_home=str(home), platform="cli")
                 assert provider._client is not None
                 provider.sync_turn(
