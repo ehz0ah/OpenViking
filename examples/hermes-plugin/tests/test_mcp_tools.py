@@ -345,3 +345,50 @@ def test_setup_checks_mcp_without_changing_saved_connection(external_provider):
         assert "test-secret" not in message
         assert (home / "config.yaml").read_bytes() == original
         assert len(requests) == 1
+
+
+@pytest.mark.parametrize("managed", [False, True])
+def test_discovery_waits_for_managed_port_recovery_only(external_provider, monkeypatch, managed):
+    home, _, module, _ = external_provider("mcp-discovery-recovery")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    with mcp_server(status_code=401) as foreign, mcp_server() as owned:
+        configure_home(home, foreign[0])
+        connection = mcp.Connection(home, module)
+        resolve = connection.resolve
+
+        def settings():
+            values, entry, _ = resolve()
+            return values, entry, managed
+
+        monkeypatch.setattr(connection, "resolve", settings)
+
+        async def recover():
+            task = asyncio.create_task(connection.discover(None))
+            try:
+                assert await asyncio.to_thread(foreign[3].wait, 5)
+                configure_home(home, owned[0])
+                return await task
+            finally:
+                if not task.done():
+                    task.cancel()
+
+        if managed:
+            assert asyncio.run(recover()).tools[0].name == "forget"
+        else:
+            with pytest.raises(module._OpenVikingHTTPError):
+                asyncio.run(recover())
+        assert not any(body for _, _, body in foreign[1])
+
+
+def test_discovery_timeout_is_bounded(external_provider, monkeypatch):
+    home, _, module, _ = external_provider("mcp-discovery-deadline")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    with mcp_server(status_code=503) as (endpoint, requests, *_):
+        configure_home(home, endpoint)
+        connection = mcp.Connection(home, module)
+        values, entry, _ = connection.resolve()
+        entry["connect_timeout"] = 0.1
+        monkeypatch.setattr(connection, "resolve", lambda: (values, entry, True))
+        with pytest.raises(TimeoutError):
+            asyncio.run(connection.discover(None))
+        assert len(requests) == 1

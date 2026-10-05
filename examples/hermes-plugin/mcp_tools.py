@@ -11,7 +11,6 @@ import asyncio
 import importlib.util
 import os
 import sys
-import time
 from builtins import BaseExceptionGroup
 from pathlib import Path
 
@@ -117,18 +116,22 @@ class Connection:
         import httpx2
 
         _, entry, managed = await asyncio.to_thread(self.resolve)
-        deadline = time.monotonic() + float(entry.get("connect_timeout", 60))
-        while True:
-            try:
-                return await self.request("tools/list", params)
-            except Exception as exc:
-                if (
-                    not managed
-                    or not isinstance(_leaf_error(exc), httpx2.ConnectError)
-                    or time.monotonic() >= deadline
-                ):
-                    raise
-                await asyncio.sleep(0.25)
+        async with asyncio.timeout(float(entry.get("connect_timeout") or 60)):
+            while True:
+                try:
+                    return await self.request("tools/list", params)
+                except Exception as exc:
+                    error = _leaf_error(exc)
+                    # A different local service can occupy the saved port while
+                    # the provider moves Quick Local. Only discovery waits;
+                    # tool calls never retry or dispatch with failed auth.
+                    starting = isinstance(error, httpx2.ConnectError) or (
+                        isinstance(error, self.ov._OpenVikingHTTPError)
+                        and error.status_code in {401, 403, 503}
+                    )
+                    if not managed or not starting:
+                        raise
+                    await asyncio.sleep(0.25)
 
 
 async def _request(ov, values, entry, method, params):
@@ -142,7 +145,9 @@ async def _request(ov, values, entry, method, params):
         for k, v in (entry.get("headers") or {}).items()
         if k.lower() not in _CONNECTION_HEADERS
     }
-    timeout = float(entry.get("timeout", 60))
+    timeout = float(entry.get("timeout") or 300)
+    if method == "tools/list":
+        timeout = float(entry.get("connect_timeout") or 60)
     cert = entry.get("client_cert")
     if entry.get("client_key"):
         cert = (cert, entry["client_key"])

@@ -133,6 +133,15 @@ def check(host, repository, root, timeout):
                 timeout=timeout,
                 check=True,
             )
+            subprocess.run(
+                command + ["openviking", "mcp", "--help"],
+                cwd=host,
+                env=env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=timeout,
+                check=True,
+            )
         probe = """
 import hermes_bootstrap
 import json
