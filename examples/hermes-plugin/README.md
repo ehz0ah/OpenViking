@@ -338,6 +338,8 @@ mirroring are retained.
 The adapter reads the same connection settings as automatic memory, including
 linked `ovcli.conf` changes and Quick Local port recovery. Credentials stay in
 the existing secret files. The adapter does not start or stop the server.
+If Quick Local is starting in the background, MCP tools may be unavailable for
+the first turn. If discovery times out, restart Hermes after the server is ready.
 Hermes continues to use its normal MCP tool filters, trust and approval rules.
 Setup preserves existing filters, timeouts, TLS settings and `enabled: false`.
 Use `hermes tools` to select the OpenViking MCP toolset. Disabling the `memory`
