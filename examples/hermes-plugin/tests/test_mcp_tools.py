@@ -1,0 +1,347 @@
+"""Exercise profile routing and the actual MCP wire protocol over loopback HTTP."""
+
+import asyncio
+import copy
+import importlib
+import json
+import threading
+import time
+from builtins import ExceptionGroup
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import pytest
+
+
+@contextmanager
+def mcp_server(*, trusted=False, status_code=200, call_delay=0):
+    requests = []
+    entered, release = threading.Event(), threading.Event()
+    release.set()
+    schema = {
+        "name": "forget",
+        "description": "Server-owned description",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"uri": {"type": "string"}},
+            "required": ["uri"],
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False},
+    }
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def respond(self, value=None, status=200):
+            body = json.dumps(value).encode() if value is not None else b""
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def do_GET(self):
+            requests.append((self.path, dict(self.headers), None))
+            if self.path != "/api/v1/system/status":
+                return self.respond(status=405)
+            entered.set()
+            assert release.wait(10)
+            if status_code != 200:
+                return self.respond({"error": {"message": "rejected"}}, status_code)
+            if trusted and not self.headers.get("X-OpenViking-Account"):
+                return self.respond(
+                    {
+                        "error": {
+                            "message": "Trusted mode requests must include X-OpenViking-Account and X-OpenViking-User"
+                        }
+                    },
+                    400,
+                )
+            self.respond({"status": "ok", "result": {"user": "alice"}})
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            requests.append((self.path, dict(self.headers), body))
+            if "id" not in body:
+                return self.respond(status=202)
+            method = body["method"]
+            if method == "initialize":
+                result = {
+                    "protocolVersion": body["params"]["protocolVersion"],
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "fixture", "version": "1"},
+                }
+            elif method == "tools/list":
+                result = {"tools": [schema]}
+            elif method == "tools/call":
+                time.sleep(call_delay)
+                result = {
+                    "content": [{"type": "text", "text": "server result"}],
+                    "structuredContent": {"uri": body["params"]["arguments"]["uri"]},
+                    "isError": False,
+                }
+            else:
+                return self.respond(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "error": {"code": -32601, "message": "unknown method"},
+                    }
+                )
+            self.respond({"jsonrpc": "2.0", "id": body["id"], "result": result})
+
+        def do_DELETE(self):
+            self.respond(status=405)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", requests, schema, entered, release
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(5)
+
+
+def configure_home(home, endpoint, *, label="alice", linked=False):
+    settings = {
+        "use_ovcli_config": linked,
+        "endpoint": endpoint,
+        "account": label,
+        "user": label,
+        "agent": f"hermes.{label}",
+    }
+    if linked:
+        settings["ovcli_config_path"] = str(home / "ovcli.conf")
+        (home / "ovcli.conf").write_text(
+            json.dumps(
+                {
+                    "url": endpoint,
+                    "root_api_key": f"key-{label}",
+                    "account": label,
+                    "user": label,
+                    "actor_peer_id": f"hermes.{label}",
+                }
+            )
+        )
+    else:
+        (home / ".env").write_text(f"OPENVIKING_API_KEY=key-{label}\n")
+    config = {
+        "memory": {"provider": "openviking", "openviking": settings},
+        "mcp_servers": {"openviking": {"headers": {"X-Custom": label}}},
+    }
+    (home / "config.yaml").write_text(json.dumps(config))
+    return config
+
+
+@pytest.mark.parametrize("enabled", [True, False, "false"])
+def test_setup_preserves_policy_and_never_copies_keys(external_provider, enabled):
+    home, _, module, _ = external_provider("mcp-setup")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    entry = {
+        "url": "https://old.example/mcp",
+        "enabled": enabled,
+        "timeout": 91,
+        "tools": {"include": ["read"], "exclude": ["forget"]},
+        "ssl_verify": "/custom/ca.pem",
+        "headers": {"X-Custom": "${CUSTOM_SECRET}", "authorization": "old-secret"},
+    }
+    config = {"mcp_servers": {"openviking": entry, "other": {"url": "https://other.example/mcp"}}}
+    original = copy.deepcopy(config)
+    mcp.configure(config, str(home))
+    new = config["mcp_servers"]["openviking"]
+    assert new["command"] == "hermes" and new["args"] == ["openviking", "mcp"]
+    assert new["env"]["HERMES_HOME"] == str(home.resolve())
+    assert "old-secret" not in json.dumps(config) and "url" not in new
+    assert new["headers"] == {"X-Custom": "${CUSTOM_SECRET}"}
+    for key in ("enabled", "timeout", "tools", "ssl_verify"):
+        assert new[key] == original["mcp_servers"]["openviking"][key]
+    assert config["mcp_servers"]["other"] == original["mcp_servers"]["other"]
+    before = copy.deepcopy(config)
+    mcp.configure(config, str(home))
+    assert config == before
+
+
+@pytest.mark.parametrize("trusted", [False, True])
+def test_server_owns_schemas_results_and_identity(external_provider, trusted):
+    from mcp import types
+
+    home, provider, module, _ = external_provider("mcp-http")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    assert provider.get_tool_schemas() == []
+    with mcp_server(trusted=trusted) as (endpoint, requests, schema, *_):
+        configure_home(home, endpoint)
+        connection = mcp.Connection(home, module)
+        tools = asyncio.run(connection.request("tools/list", None))
+        assert tools.tools[0].model_dump(by_alias=True, exclude_none=True) == schema
+        uri = "viking://user/alice/memories/exact.md"
+        result = asyncio.run(
+            connection.request(
+                "tools/call", types.CallToolRequestParams(name="forget", arguments={"uri": uri})
+            )
+        )
+        assert result.content[0].text == "server result"
+        assert result.structured_content == {"uri": uri}
+        calls = [
+            (headers, body)
+            for _, headers, body in requests
+            if body and body.get("method") == "tools/call"
+        ]
+        assert len(calls) == 1
+        headers, body = calls[0]
+        assert body["params"]["arguments"] == {"uri": uri}
+        assert headers["Authorization"] == "Bearer key-alice"
+        assert headers["X-OpenViking-Actor-Peer"] == "hermes.alice"
+        assert headers["X-Custom"] == "alice"
+        assert headers.get("X-OpenViking-Account") == ("alice" if trusted else None)
+
+
+def test_connection_snapshot_survives_reload_and_next_call_uses_new_connection(external_provider):
+    from mcp import types
+
+    home, _, module, _ = external_provider("mcp-reload")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    with mcp_server() as a, mcp_server() as b:
+        configure_home(home, a[0], linked=True)
+        connection = mcp.Connection(home, module)
+        a[4].clear()
+        results = []
+
+        def request():
+            results.append(
+                asyncio.run(
+                    connection.request(
+                        "tools/call",
+                        types.CallToolRequestParams(
+                            name="forget", arguments={"uri": "viking://user/alice/memories/a.md"}
+                        ),
+                    )
+                )
+            )
+
+        worker = threading.Thread(target=request)
+        worker.start()
+        try:
+            assert a[3].wait(5)
+            configure_home(home, b[0], label="bob", linked=True)
+            a[4].set()
+            worker.join(10)
+            assert not worker.is_alive() and len(results) == 1
+            assert not b[1]
+            asyncio.run(connection.request("tools/list", None))
+            a_calls = [h for _, h, body in a[1] if body and body.get("method") == "tools/call"]
+            assert a_calls[0]["Authorization"] == "Bearer key-alice"
+            assert all(h.get("Authorization") == "Bearer key-bob" for _, h, _ in b[1])
+        finally:
+            a[4].set()
+            worker.join(10)
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 500])
+def test_failed_identity_probe_never_dispatches_or_retries_a_write(external_provider, status):
+    from mcp import types
+
+    home, _, module, _ = external_provider("mcp-failed-probe")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    with mcp_server(status_code=status) as (endpoint, requests, *_):
+        configure_home(home, endpoint)
+        with pytest.raises(module._OpenVikingHTTPError):
+            asyncio.run(
+                mcp.Connection(home, module).request(
+                    "tools/call",
+                    types.CallToolRequestParams(name="forget", arguments={"uri": "exact.md"}),
+                )
+            )
+        assert len(requests) == 1 and requests[0][2] is None
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "mcp__openviking__find",
+        "mcp__openviking__search",
+        "mcp__openviking__read",
+        "mcp__openviking__list",
+        "mcp__openviking__ls",
+        "mcp__openviking__tree",
+        "mcp__openviking__grep",
+        "mcp__openviking__glob",
+        "viking_search",
+        "mcp_openviking_search",
+    ],
+)
+def test_retrieved_content_is_not_captured_again(external_provider, name):
+    _, provider, _, _ = external_provider("mcp-filter")
+    messages = [
+        {"role": "user", "content": "My new preference"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "lookup", "type": "function", "function": {"name": name, "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "lookup", "name": name, "content": "OLD RETRIEVED MEMORY"},
+        {"role": "assistant", "content": "Acknowledged"},
+    ]
+    batch = provider._messages_to_openviking_batch(messages)
+    assert "OLD RETRIEVED MEMORY" not in json.dumps(batch)
+    assert "My new preference" in json.dumps(batch)
+
+
+@pytest.mark.parametrize(
+    "name", ["mcp__openviking__remember", "mcp__openviking__write", "mcp_other_search"]
+)
+def test_write_results_and_other_servers_are_not_misclassified(external_provider, name):
+    _, _, module, _ = external_provider("mcp-other")
+    assert not module._is_openviking_recall_tool_name(name)
+
+
+def test_timed_out_write_is_not_replayed(external_provider):
+    import httpx2
+    from mcp import types
+
+    home, _, module, _ = external_provider("mcp-timeout")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    with mcp_server(call_delay=0.5) as (endpoint, requests, *_):
+        config = configure_home(home, endpoint)
+        config["mcp_servers"]["openviking"]["timeout"] = 0.1
+        (home / "config.yaml").write_text(json.dumps(config))
+        try:
+            asyncio.run(
+                mcp.Connection(home, module).request(
+                    "tools/call",
+                    types.CallToolRequestParams(name="forget", arguments={"uri": "exact.md"}),
+                )
+            )
+        except (ExceptionGroup, httpx2.TimeoutException) as exc:
+            assert isinstance(mcp._leaf_error(exc), httpx2.TimeoutException)
+        else:
+            pytest.fail("The slow write must time out")
+        calls = [body for _, _, body in requests if body and body.get("method") == "tools/call"]
+        assert len(calls) == 1
+
+
+def test_setup_checks_mcp_without_changing_saved_connection(external_provider):
+    home, _, module, _ = external_provider("mcp-preflight")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    with mcp_server(status_code=404) as (endpoint, requests, *_):
+        configure_home(home, endpoint)
+        original = (home / "config.yaml").read_bytes()
+        values = {
+            "endpoint": endpoint,
+            "api_key": "test-secret",
+            "account": "alice",
+            "user": "alice",
+            "agent": "",
+        }
+        ok, message = mcp.validate_connection(module, values)
+        assert not ok and "MCP is unavailable" in message
+        assert "test-secret" not in message
+        assert (home / "config.yaml").read_bytes() == original
+        assert len(requests) == 1

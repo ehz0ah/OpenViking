@@ -98,6 +98,7 @@ def check(host, repository, root, timeout):
             "local_server.py",
             "local_packages.py",
             "cli.py",
+            "mcp_tools.py",
             "native_memory_mirror.py",
             "plugin.yaml",
             "pyproject.toml",

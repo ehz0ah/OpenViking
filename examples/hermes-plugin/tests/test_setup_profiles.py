@@ -1,6 +1,7 @@
 """Exercise the external setup wizard and its saved Hermes session policy."""
 
 import copy
+import importlib
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +21,8 @@ def setup_state(external_provider, monkeypatch, *, route="local", line_ending=b"
     import hermes_cli.memory_setup as setup
 
     home, provider, module, _ = external_provider("setup-profile")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    monkeypatch.setattr(mcp, "validate_connection", lambda *_: (True, ""))
     config = {
         "group_sessions_per_user": True,
         "thread_sessions_per_user": False,
@@ -103,6 +106,9 @@ def test_setup_persists_preset_and_real_gateway_session_boundaries(
     assert (other_home / "config.yaml").read_bytes() == other_before
     saved = yaml.safe_load((home / "config.yaml").read_text())
     settings = saved["memory"]["openviking"]
+    assert saved["mcp_servers"]["openviking"]["args"] == ["openviking", "mcp"]
+    assert saved["mcp_servers"]["openviking"]["env"]["HERMES_HOME"] == str(home)
+    assert "OpenViking MCP tools configured. Restart Hermes to load them." in output
     assert settings["recall_scope"] == ("peer" if profile == "personal" else "shared")
     assert settings["recall_limit"] == 9
     assert settings["use_ovcli_config"] == (route != "local")

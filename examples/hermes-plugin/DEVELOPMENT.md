@@ -16,7 +16,7 @@ Preserve the existing copyright and permission notice.
 The distribution name is `hermes-plugin-openviking`. The provider, plugin, and
 future Hermes catalog key remain `openviking`. Existing `memory.openviking`
 settings, environment variables, linked `ovcli.conf` files, data paths, and
-`viking_*` tools keep their current behavior.
+automatic recall, capture and commit retain their behavior. Explicit tools use the server's MCP schemas.
 
 The active-session commit lifecycle was ported from
 [KoNit-K's Hermes PR #112533](https://github.com/NousResearch/hermes-agent/pull/112533),
@@ -71,6 +71,11 @@ Source builds use package version pins without reviewed binary hashes. A platfor
 needs a tested OpenViking/embedding-wheel pair for the prebuilt path.
 Setup also checks LLM access through the installed OpenViking backend. The CI
 fixture must serve an actual completion; an unreachable LLM must fail setup.
+
+MCP tools adapt the intent of [Hermes PR #86052](https://github.com/NousResearch/hermes-agent/pull/86052).
+A profile-scoped stdio adapter forwards to `/mcp`; it reuses the provider's
+connection resolver so linked credentials and Quick Local ports stay current.
+It does not manage the server process, rewrite tool schemas or retry writes.
 
 ## Migration coordination
 
