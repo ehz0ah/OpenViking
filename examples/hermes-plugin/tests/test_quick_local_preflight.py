@@ -20,15 +20,25 @@ def ql(external_provider):
     return importlib.import_module(module.__name__ + ".quick_local")
 
 
-@pytest.mark.parametrize("status,retries", [(401, False), (404, False), (429, True), (500, True)])
-def test_preflight_script_retries_only_transient_errors(ql, tmp_path, monkeypatch, status, retries):
+@pytest.mark.parametrize("status,name,retries", [
+    (401, "AuthenticationError", False),
+    (403, "PermissionDeniedError", False),
+    (404, "NotFoundError", False),
+    (429, "RateLimitError", True),
+    (500, "InternalServerError", True),
+])
+def test_preflight_script_retries_only_transient_errors(ql, tmp_path, monkeypatch, status, name, retries):
     import openai
 
-    error = openai.APIStatusError(
+    error = getattr(openai, name)(
         "secret response body", response=httpx.Response(status, request=httpx.Request("POST", "https://test")),
         body=None,
     )
-    _check_script(ql, tmp_path, monkeypatch, error, retries)
+    error.__context__ = httpx.HTTPStatusError(
+        "secret response body", request=error.request, response=error.response,
+    )
+    error.__suppress_context__ = True  # The OpenAI SDK raises status errors from None.
+    _check_script(ql, tmp_path, monkeypatch, error, retries, succeeds=False)
 
 
 @pytest.mark.parametrize("error,retries", [
@@ -154,6 +164,7 @@ def _check_script(ql, tmp_path, monkeypatch, error, retries, succeeds=True, expe
         message = str(caught.value)
         log = (tmp_path / "logs/openviking-server.log").read_text()
         assert "secret" not in log
+        assert type(error).__name__ in message and type(error).__name__ in log
         if expected:
             assert expected in message
     assert vlm.get_completion.call_count == (2 if retries else 1)

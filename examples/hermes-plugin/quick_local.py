@@ -663,12 +663,13 @@ def failure_details(exc):
         if isinstance(current, (httpx.HTTPError, TimeoutError)):
             error = current
             break
+        # Suppression hides traceback text, not the structured HTTP metadata.
         current = current.__cause__ or current.__context__
     timed_out = isinstance(error, (TimeoutError, httpx.TimeoutException, openai.APITimeoutError))
     connection = not timed_out and isinstance(error, (httpx.TransportError, openai.APIConnectionError))
     status = getattr(getattr(error, "response", None), "status_code", getattr(error, "status_code", None))
     status = status if type(status) is int and 100 <= status <= 599 and not (timed_out or connection) else None
-    return {"error": type(error).__name__, "status": status,
+    return {"error": type(exc).__name__, "status": status,
             "timeout": timed_out, "connection": connection}
 
 for attempt in (1, 2):
