@@ -21,6 +21,7 @@ import shutil
 import socket
 import stat
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -2871,10 +2872,14 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
             self._mcp_setup_notice = True
             if not profile_entry(self._hermes_home, _profile_openviking_env(self._hermes_home)):
-                logger.warning(
+                message = (
                     "OpenViking tools now use MCP. Run hermes memory setup openviking, then restart Hermes. "
-                    "Automatic memory remains active.",
+                    "Automatic memory remains active."
                 )
+                logger.warning(message)
+                # Hermes routes warnings to log files. Keep this upgrade action
+                # visible without writing through a callback that can use stdout.
+                print(message, file=sys.stderr)
         return []
 
     def shutdown(self) -> None:

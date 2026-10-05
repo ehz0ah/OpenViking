@@ -512,11 +512,29 @@ def test_tls_failure_is_actionable_and_not_retried(external_provider, monkeypatc
     assert "certificate paths" in mcp._error_hint(FileNotFoundError("secret path"))
 
 
-def test_migration_notice_does_not_write_to_cli_json_callback(external_provider, caplog):
+def test_migration_notice_is_visible_once_without_writing_to_stdout(external_provider, caplog, capsys):
     home, provider, _, _ = external_provider("mcp-migration-notice")
     provider._hermes_home = str(home)
     callbacks = []
     provider._runtime_warning_callback = callbacks.append
     assert provider.get_tool_schemas() == []
+    assert provider.get_tool_schemas() == []
     assert not callbacks
     assert "OpenViking tools now use MCP" in caplog.text
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err.count("OpenViking tools now use MCP") == 1
+    assert "hermes memory setup openviking" in output.err
+
+
+def test_configured_but_disabled_mcp_needs_no_migration_notice(external_provider, capsys):
+    import yaml
+
+    home, provider, _, _ = external_provider("mcp-disabled-notice")
+    provider._hermes_home = str(home)
+    config_path = home / "config.yaml"
+    config = yaml.safe_load(config_path.read_text())
+    config["mcp_servers"] = {"openviking": {"enabled": False}}
+    config_path.write_text(json.dumps(config))
+    assert provider.get_tool_schemas() == []
+    assert capsys.readouterr().err == ""
