@@ -141,14 +141,15 @@ def configure_home(home, endpoint, *, label="alice", linked=False):
 
 
 @pytest.mark.parametrize("enabled", [True, False, "false"])
-def test_setup_preserves_policy_and_never_copies_keys(external_provider, enabled):
+@pytest.mark.parametrize("trust", ["full", "untrusted", None])
+def test_setup_preserves_policy_and_never_copies_keys(external_provider, enabled, trust):
     home, _, module, _ = external_provider("mcp-setup")
     mcp = importlib.import_module(module.__name__ + ".mcp_tools")
     entry = {
         "url": "https://old.example/mcp",
         "enabled": enabled,
         "timeout": 91,
-        "trust": "full",
+        "trust": trust,
         "env": {"SSL_CERT_FILE": "/explicit/ca.pem"},
         "tools": {"include": ["read"], "exclude": ["forget"]},
         "ssl_verify": "/custom/ca.pem",
@@ -171,13 +172,13 @@ def test_setup_preserves_policy_and_never_copies_keys(external_provider, enabled
     assert new["env"]["SSL_CERT_FILE"] == "/explicit/ca.pem"
 
 
-def test_setup_exposes_all_tools_with_default_approval_policy(external_provider):
+def test_setup_exposes_all_tools_with_hermes_default_trust(external_provider):
     home, _, module, _ = external_provider("mcp-default-policy")
     mcp = importlib.import_module(module.__name__ + ".mcp_tools")
     config = {}
     mcp.configure(config, str(home))
     entry = config["mcp_servers"]["openviking"]
-    assert entry["trust"] == "untrusted"
+    assert entry["trust"] == "full"
     assert "tools" not in entry
 
 

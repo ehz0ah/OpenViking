@@ -109,7 +109,12 @@ def test_setup_persists_preset_and_real_gateway_session_boundaries(
     assert saved["mcp_servers"]["openviking"]["args"] == ["openviking", "mcp"]
     assert saved["mcp_servers"]["openviking"]["env"]["HERMES_HOME"] == str(home)
     assert "OpenViking MCP tools configured. Restart Hermes to load them." in output
-    assert "Hermes will use its approval prompts for MCP tool calls." in output
+    assert saved["mcp_servers"]["openviking"]["trust"] == "full"
+    assert (
+        "OpenViking tools run without per-call approval. They can modify data, "
+        "and forget can permanently delete entire directories."
+    ) in output
+    assert "Hermes will use its approval prompts for MCP tool calls." not in output
     assert settings["recall_scope"] == ("peer" if profile == "personal" else "shared")
     assert settings["recall_limit"] == 9
     assert settings["use_ovcli_config"] == (route != "local")
@@ -151,6 +156,27 @@ def test_setup_persists_preset_and_real_gateway_session_boundaries(
     assert (key("alice") == key("bob")) == (profile == "shared")
     assert key("alice", thread="topic") == key("bob", thread="topic")
     assert key("alice", chat="group-a") != key("alice", chat="group-b")
+
+
+@pytest.mark.parametrize("trust", ["full", "untrusted", None])
+def test_setup_notice_matches_preserved_trust(external_provider, monkeypatch, capsys, trust):
+    home, provider, _, config, setup = setup_state(external_provider, monkeypatch)
+    config["mcp_servers"] = {"openviking": {"trust": trust, "tools": {"exclude": ["forget"]}}}
+    patch_menu(monkeypatch, select_profile("personal", "local", [], setup))
+
+    provider.post_setup(str(home), config)
+
+    entry = yaml.safe_load((home / "config.yaml").read_text())["mcp_servers"]["openviking"]
+    # Hermes drops null values on save; an absent trust setting also means full.
+    assert entry.get("trust") == trust
+    assert entry["tools"] == {"exclude": ["forget"]}
+    output = capsys.readouterr().out
+    assert ("OpenViking tools run without per-call approval." in output) == (
+        trust != "untrusted"
+    )
+    assert ("Hermes will use its approval prompts for MCP tool calls." in output) == (
+        trust == "untrusted"
+    )
 
 
 @pytest.mark.parametrize("stage", ["usage", "confirm", "connection", "save", "validation"])

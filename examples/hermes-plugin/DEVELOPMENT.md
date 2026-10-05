@@ -79,23 +79,28 @@ It does not manage the server process, rewrite tool schemas or retry writes.
 
 ### MCP host compatibility
 
-The default `trust: untrusted` policy needs Hermes to recognize MCP SDK 2's
-`read_only_hint` Python attribute. Hermes main `80309111b480937264881f29f66fa87a3af72356`,
-the current CI pin `5bba024d8ddd388f56f354c1f789be825e3d8a3c`, and v2026.9.24
-still read only `readOnlyHint`. Every tool is therefore classified as write-capable.
-[Hermes #130391](https://github.com/NousResearch/hermes-agent/pull/130391) is one
-focused fix; it is not merged. Keep tool annotations unchanged in this plugin.
+Fresh setup uses Hermes's `trust: full` default, with a notice that all exposed
+tools can run without per-call approval, including recursive deletion. Existing
+trust settings and tool filters are preserved. This policy permits interactive
+and unattended use without depending on the host's approval UI.
+
+Opt-in `trust: untrusted` needs Hermes to recognize MCP SDK 2's `read_only_hint`
+Python attribute. The tested CI pin `5bba024d8ddd388f56f354c1f789be825e3d8a3c` and
+v2026.9.24 read only `readOnlyHint`. Every tool is therefore classified as
+write-capable. [Hermes #111270](https://github.com/NousResearch/hermes-agent/pull/111270)
+proposes a focused fix. Keep tool annotations unchanged in this plugin.
 
 Classic CLI consent routing is fixed on Hermes main by
 `ef1faa4cf810423513a8a5b6ff81afbcf215c363`; the older test hosts lack that fix.
 Unattended workers intentionally decline consent. `trust: full` bypasses the
 approval gate but does not repair annotation handling.
 
-Before releasing this MCP migration with the default approval policy, validate
-a Hermes build with both fixes: read-only calls without approval, interactive
-write approval and denial, and unattended write refusal. Update the tested host
-pin and baseline from that evidence. Green plugin tests alone do not establish
-that the host's user-facing approval flow works.
+Before considering `untrusted` as a future default, validate a released Hermes
+build with both fixes: read-only calls without approval, interactive write
+approval and denial, and unattended write refusal. `search` is annotated writable
+by OpenViking, so it still requires approval after the host fix. Update the tested
+host pin and baseline from that evidence, and preserve existing trust choices.
+Green plugin tests alone do not establish that the host's approval flow works.
 
 ## Migration coordination
 

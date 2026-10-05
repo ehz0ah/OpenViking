@@ -344,18 +344,17 @@ server, including Custom and remote servers. Tools can be unavailable on the
 first turn while discovery runs. After a longer outage, run `/reload-mcp` in the
 Hermes CLI once OpenViking is ready, or restart the gateway.
 
-Setup exposes all server tools and defaults to `trust: untrusted`. Hermes then
-asks for approval for calls it considers write-capable, including `forget` and
-`search`. The tested Hermes release, v2026.9.24, and CI host also classify
-read-only tools as writes with MCP SDK 2. On these builds, use `hermes chat --tui`
-to approve each call; their classic CLI cannot display these approval prompts.
-Current Hermes main fixes the classic CLI prompt, but still needs the read-only
-annotation fix. See [compatibility details](DEVELOPMENT.md#mcp-host-compatibility).
+Setup exposes all server tools and defaults to `trust: full`, matching Hermes.
+OpenViking tools run without per-call approval. They can modify data, and
+`forget` can permanently delete entire directories. OpenViking still enforces
+the connected user's access permissions. Setup prints this policy before it exits.
 
-Unattended runs (`-q` and cron) cannot answer approval prompts. To allow MCP
-calls without this approval gate, explicitly set `trust: full` under
-`mcp_servers.openviking` in the profile's `config.yaml`, then reload MCP or
-restart Hermes. This permits writes and deletes without per-call approval.
+To require Hermes approval for tools classified as writable, set `trust: untrusted`
+under `mcp_servers.openviking` in the profile's `config.yaml`, then reload MCP or
+restart Hermes. On the tested Hermes release, v2026.9.24, this also gates read-only
+tools; its classic CLI cannot display these approval prompts. The TUI can prompt,
+but unattended runs (`-q` and cron) cannot approve calls. See
+[compatibility details](DEVELOPMENT.md#mcp-host-compatibility).
 Automatic recall, capture and commits do not use this MCP approval gate.
 
 Existing trust settings, tool filters, timeouts, TLS

@@ -116,9 +116,9 @@ def configure(config: dict, hermes_home: str) -> None:
             k: v for k, v in entry["headers"].items() if k.lower() not in _CONNECTION_HEADERS
         }
     entry.setdefault("enabled", True)
-    # Expose every server tool, but use Hermes's approval gate for tools not
-    # annotated read-only. Preserve an explicitly selected trust policy.
-    entry.setdefault("trust", "untrusted")
+    # Match Hermes's default and preserve an explicitly selected trust policy.
+    # Setup explains that full trust permits writes and deletes without approval.
+    entry.setdefault("trust", "full")
     # Cold Quick Local starts happen in the memory provider, independently of
     # this child. Leave enough time for discovery to wait for that startup.
     entry.setdefault("connect_timeout", 60)
