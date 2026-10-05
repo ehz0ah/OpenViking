@@ -66,6 +66,7 @@ Quick Local creates that environment for you. For Custom setup to start a local
 server, make `openviking-server` available on `PATH`.
 
 OpenViking 0.4.1 or newer with its `/mcp` endpoint is required for MCP tools.
+When the MCP entry is disabled, setup validates automatic memory access only.
 Quick Local supplies OpenViking 0.4.22. Hermes can identify older servers that
 expose the legacy status-only health response, but those releases do not provide
 the authenticated-user identity contract required by this integration.
@@ -338,10 +339,18 @@ mirroring are retained.
 The adapter reads the same connection settings as automatic memory, including
 linked `ovcli.conf` changes and Quick Local port recovery. Credentials stay in
 the existing secret files. The adapter does not start or stop the server.
-If Quick Local is starting in the background, MCP tools may be unavailable for
-the first turn. If discovery times out, restart Hermes after the server is ready.
-Hermes continues to use its normal MCP tool filters, trust and approval rules.
-Setup preserves existing filters, timeouts, TLS settings and `enabled: false`.
+Discovery waits up to `connect_timeout` (60 seconds by default) for an unreachable
+server, including Custom and remote servers. Tools can be unavailable on the
+first turn while discovery runs. After a longer outage, run `/reload-mcp` in the
+Hermes CLI once OpenViking is ready, or restart the gateway.
+
+Setup exposes all server tools and defaults to `trust: untrusted`. Hermes then
+asks for approval for calls it considers write-capable, including `forget` and
+`search`. Some Hermes versions also prompt for reads with MCP SDK 2.
+Existing trust settings, tool filters, timeouts, TLS
+settings and `enabled: false` are preserved. CA and proxy environment settings
+are passed to the adapter. Hermes can defer tool discovery until `tool_search`
+and temporarily pause the toolset after repeated tool errors.
 Use `hermes tools` to select the OpenViking MCP toolset. Disabling the `memory`
 toolset alone does not disable MCP tools; disable the OpenViking MCP entry or
 toolset as well if needed.
@@ -349,9 +358,10 @@ toolset as well if needed.
 These are the standard OpenViking tool contracts. `remember` accepts messages
 for extraction; `write` and `edit` change specific files. `forget` supports the
 server's permitted URI scopes and its `recursive` argument. Confirm the exact
-target before deletion. Local paths passed to `add_resource` refer to the
-OpenViking server's filesystem. The adapter does not upload files from the
-Hermes machine; use the OpenViking CLI to upload a local file to a remote server.
+target before deletion. For local paths, follow the `add_resource` response:
+current servers return a temporary upload URL and upload instructions. The
+adapter does not automatically upload or zip files from the Hermes machine.
+Use the OpenViking CLI if the agent cannot perform the requested upload.
 Use the discovered schemas instead of arguments from the old `viking_*` tools.
 
 ## Memory Writes And Deletes

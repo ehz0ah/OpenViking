@@ -557,6 +557,8 @@ def run_setup(hermes_home: str, config: dict) -> None:
         os.environ.pop("OPENVIKING_RECALL_SCOPE", None)
         save_config(config)
         _say("OpenViking MCP tools configured. Restart Hermes to load them.")
+        if config["mcp_servers"]["openviking"].get("trust") == "untrusted":
+            _say("Hermes will use its approval prompts for MCP tool calls.")
         if usage_profile == _SHARED_PROFILE:
             _say("Restart the Hermes gateway to apply the shared session settings.")
         else:

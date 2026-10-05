@@ -109,6 +109,7 @@ def test_setup_persists_preset_and_real_gateway_session_boundaries(
     assert saved["mcp_servers"]["openviking"]["args"] == ["openviking", "mcp"]
     assert saved["mcp_servers"]["openviking"]["env"]["HERMES_HOME"] == str(home)
     assert "OpenViking MCP tools configured. Restart Hermes to load them." in output
+    assert "Hermes will use its approval prompts for MCP tool calls." in output
     assert settings["recall_scope"] == ("peer" if profile == "personal" else "shared")
     assert settings["recall_limit"] == 9
     assert settings["use_ovcli_config"] == (route != "local")

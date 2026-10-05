@@ -2871,9 +2871,9 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
             self._mcp_setup_notice = True
             if not profile_entry(self._hermes_home, _profile_openviking_env(self._hermes_home)):
-                _emit_runtime(
+                logger.warning(
                     "OpenViking tools now use MCP. Run hermes memory setup openviking, then restart Hermes. "
-                    "Automatic memory remains active.", self._runtime_warning_callback,
+                    "Automatic memory remains active.",
                 )
         return []
 

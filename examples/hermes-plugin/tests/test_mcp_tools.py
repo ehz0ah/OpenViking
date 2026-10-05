@@ -148,6 +148,8 @@ def test_setup_preserves_policy_and_never_copies_keys(external_provider, enabled
         "url": "https://old.example/mcp",
         "enabled": enabled,
         "timeout": 91,
+        "trust": "full",
+        "env": {"SSL_CERT_FILE": "/explicit/ca.pem"},
         "tools": {"include": ["read"], "exclude": ["forget"]},
         "ssl_verify": "/custom/ca.pem",
         "headers": {"X-Custom": "${CUSTOM_SECRET}", "authorization": "old-secret"},
@@ -160,12 +162,50 @@ def test_setup_preserves_policy_and_never_copies_keys(external_provider, enabled
     assert new["env"]["HERMES_HOME"] == str(home.resolve())
     assert "old-secret" not in json.dumps(config) and "url" not in new
     assert new["headers"] == {"X-Custom": "${CUSTOM_SECRET}"}
-    for key in ("enabled", "timeout", "tools", "ssl_verify"):
+    for key in ("enabled", "timeout", "tools", "ssl_verify", "trust"):
         assert new[key] == original["mcp_servers"]["openviking"][key]
     assert config["mcp_servers"]["other"] == original["mcp_servers"]["other"]
     before = copy.deepcopy(config)
     mcp.configure(config, str(home))
     assert config == before
+    assert new["env"]["SSL_CERT_FILE"] == "/explicit/ca.pem"
+
+
+def test_setup_exposes_all_tools_with_default_approval_policy(external_provider):
+    home, _, module, _ = external_provider("mcp-default-policy")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    config = {}
+    mcp.configure(config, str(home))
+    entry = config["mcp_servers"]["openviking"]
+    assert entry["trust"] == "untrusted"
+    assert "tools" not in entry
+
+
+def test_transport_environment_survives_hermes_stdio_filter(external_provider, monkeypatch):
+    from tools.mcp_tool_config import _build_safe_env, _interpolate_env_vars
+
+    home, _, module, _ = external_provider("mcp-env")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    for key in mcp._TRANSPORT_ENV_KEYS:
+        monkeypatch.setenv(key, "transport-setting")
+    config = {}
+    mcp.configure(config, str(home))
+    env = _build_safe_env(_interpolate_env_vars(config["mcp_servers"]["openviking"]["env"]))
+    for key in mcp._TRANSPORT_ENV_KEYS:
+        assert env[key] == "transport-setting"
+
+
+def test_unset_transport_references_are_removed_before_sdk_start(external_provider, monkeypatch):
+    _, _, module, _ = external_provider("mcp-unset-env")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    for key in (*mcp._ENV_KEYS, *mcp._TRANSPORT_ENV_KEYS):
+        monkeypatch.setenv(key, "${" + key + "}")
+
+    async def serve(_home):
+        assert all(key not in mcp.os.environ for key in (*mcp._ENV_KEYS, *mcp._TRANSPORT_ENV_KEYS))
+
+    monkeypatch.setattr(mcp, "serve", serve)
+    mcp.run(None)
 
 
 @pytest.mark.parametrize("trusted", [False, True])
@@ -319,12 +359,28 @@ def test_timed_out_write_is_not_replayed(external_provider):
                     types.CallToolRequestParams(name="forget", arguments={"uri": "exact.md"}),
                 )
             )
-        except (ExceptionGroup, httpx2.TimeoutException) as exc:
-            assert isinstance(mcp._leaf_error(exc), httpx2.TimeoutException)
+        except (ExceptionGroup, TimeoutError, httpx2.TimeoutException) as exc:
+            assert "timed out" in mcp._error_hint(exc)
         else:
             pytest.fail("The slow write must time out")
         calls = [body for _, _, body in requests if body and body.get("method") == "tools/call"]
         assert len(calls) == 1
+
+
+@pytest.mark.parametrize("enabled", [False, "false", 0, "off"])
+def test_disabled_mcp_does_not_block_memory_setup(external_provider, monkeypatch, enabled):
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    home, _, module, _ = external_provider("mcp-disabled-setup")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    config = configure_home(home, "http://127.0.0.1:9")
+    config["mcp_servers"]["openviking"]["enabled"] = enabled
+    (home / "config.yaml").write_text(json.dumps(config))
+    token = set_hermes_home_override(home)
+    try:
+        assert mcp.validate_connection(module, {}) == (True, "")
+    finally:
+        reset_hermes_home_override(token)
 
 
 def test_setup_checks_mcp_without_changing_saved_connection(external_provider):
@@ -392,3 +448,75 @@ def test_discovery_timeout_is_bounded(external_provider, monkeypatch):
         with pytest.raises(TimeoutError):
             asyncio.run(connection.discover(None))
         assert len(requests) == 1
+
+
+@pytest.mark.parametrize("managed", [False, True])
+def test_discovery_follows_server_start_during_budget(external_provider, monkeypatch, managed):
+    import socket
+
+    home, _, module, _ = external_provider("mcp-cold-server")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    with socket.socket() as unavailable, mcp_server() as owned:
+        unavailable.bind(("127.0.0.1", 0))
+        endpoint = f"http://127.0.0.1:{unavailable.getsockname()[1]}"
+        unavailable.close()
+        config = configure_home(home, endpoint)
+        connection = mcp.Connection(home, module)
+        resolve = connection.resolve
+
+        def settings():
+            values, entry, _ = resolve()
+            entry["connect_timeout"] = 5
+            return values, entry, managed
+
+        monkeypatch.setattr(connection, "resolve", settings)
+
+        async def recover():
+            task = asyncio.create_task(connection.discover(None))
+            await asyncio.sleep(0.1)
+            config["memory"]["openviking"]["endpoint"] = owned[0]
+            (home / "config.yaml").write_text(json.dumps(config))
+            return await task
+
+        assert asyncio.run(recover()).tools[0].name == "forget"
+
+
+def test_tls_failure_is_actionable_and_not_retried(external_provider, monkeypatch):
+    import ssl
+
+    import httpx2
+
+    home, _, module, _ = external_provider("mcp-tls-error")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    configure_home(home, "https://localhost:9")
+    connection = mcp.Connection(home, module)
+    calls = []
+
+    async def request(*_):
+        calls.append(1)
+        try:
+            raise ssl.SSLCertVerificationError("private certificate details")
+        except ssl.SSLCertVerificationError as error:
+            raise httpx2.ConnectError("private endpoint") from error
+
+    monkeypatch.setattr(connection, "request", request)
+    with pytest.raises(httpx2.ConnectError) as caught:
+        asyncio.run(connection.discover(None))
+    assert calls == [1]
+    hint = mcp._error_hint(caught.value)
+    assert "TLS verification failed" in hint and "SSL_CERT_FILE" in hint
+    assert "private" not in hint
+    assert "TLS verification failed" in mcp._error_hint(
+        httpx2.ConnectError("('private certificate is not permitted for this usage',)")
+    )
+    assert "certificate paths" in mcp._error_hint(FileNotFoundError("secret path"))
+
+
+def test_migration_notice_does_not_write_to_cli_json_callback(external_provider, caplog):
+    home, provider, _, _ = external_provider("mcp-migration-notice")
+    provider._hermes_home = str(home)
+    callbacks = []
+    provider._runtime_warning_callback = callbacks.append
+    assert provider.get_tool_schemas() == []
+    assert not callbacks
+    assert "OpenViking tools now use MCP" in caplog.text
