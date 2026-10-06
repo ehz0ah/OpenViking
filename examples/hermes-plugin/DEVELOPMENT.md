@@ -97,7 +97,12 @@ bundled provider. Hermes PR [#114569](https://github.com/NousResearch/hermes-age
 adds catalog recovery for configured providers that no longer resolve. The
 bundled provider takes precedence while it remains present.
 
-This plugin does not add a Desktop `config_schema.py`.
+Desktop setup is declared in `config_schema.py` and handled by `_desktop.py`.
+The schema is published only when Hermes advertises `PROVIDER_SETUP_API_VERSION >= 1`.
+Older hosts load the provider normally without importing the new setup types.
+Desktop and CLI share connection validation, profile linking, usage presets, and
+Quick Local provisioning. Desktop does not mutate the process environment.
+Test the external loader with the bundled OpenViking directory absent.
 The wizard uses private helpers from `hermes_cli.memory_setup`; changes to
 those helpers require compatibility checks. The plugin uses HTTP. Quick Local installs the server in a separate
 profile runtime through Hermes PM, or the earlier Hermes uv installer on the

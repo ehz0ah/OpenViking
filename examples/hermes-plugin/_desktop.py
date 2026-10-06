@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Mapping, Optional
 
@@ -21,19 +22,16 @@ def _ov():
 
 def _profile_description(profile) -> str:
     ov = _ov()
-    endpoint = (
-        ov._clean_config_value(profile.values.get("endpoint")) or ov._DEFAULT_ENDPOINT
-    )
+    endpoint = ov._clean_config_value(profile.values.get("endpoint")) or ov._DEFAULT_ENDPOINT
     return f"{endpoint} ({profile.path})"
 
 
 def _profile_payload(profile, *, active_path: Optional[Path]) -> dict:
     ov = _ov()
     is_active = bool(
-        active_path
-        and ov._profile_identity(profile.path) == ov._profile_identity(active_path)
+        active_path and ov._profile_identity(profile.path) == ov._profile_identity(active_path)
     )
-    label = ov._profile_display_name(profile)
+    label = ov._setup._profile_display_name(profile)
     return {
         "value": str(profile.path),
         "label": f"{label} (Active)" if is_active else label,
@@ -47,13 +45,10 @@ def _profiles(
     env_values: Mapping[str, str],
 ) -> list:
     ov = _ov()
-    profiles = ov._discover_ovcli_profiles(env_values=env_values)
+    profiles = ov._discover_ovcli_profiles(env=env_values)
     if active_path and active_path.is_file():
         active_identity = ov._profile_identity(active_path)
-        if not any(
-            ov._profile_identity(profile.path) == active_identity
-            for profile in profiles
-        ):
+        if not any(ov._profile_identity(profile.path) == active_identity for profile in profiles):
             profile = ov._load_profile(active_path, source="active", name="active")
             if profile is not None:
                 profiles.append(profile)
@@ -64,7 +59,7 @@ def _connection_type(endpoint: str) -> str:
     ov = _ov()
     return (
         "OpenViking Service"
-        if ov._is_openviking_service_endpoint(endpoint)
+        if endpoint.rstrip("/") == ov._OPENVIKING_SERVICE_ENDPOINT.rstrip("/")
         else "Custom"
     )
 
@@ -100,30 +95,18 @@ def _health_for_settings(settings: dict) -> dict:
     )
 
 
-def _is_running_hermes_home(hermes_home: str | Path) -> bool:
-    from hermes_constants import get_process_hermes_home
-
-    return (
-        Path(hermes_home).expanduser().resolve()
-        == get_process_hermes_home().expanduser().resolve()
-    )
-
-
 def snapshot(*, hermes_home: str | Path, probe_health: bool) -> dict:
     """Return a redacted profile-scoped snapshot for the shared settings form."""
-    from hermes_cli.config import load_env
-
     ov = _ov()
-    provider_config = ov._load_hermes_openviking_config()
-    env_values = os.environ if _is_running_hermes_home(hermes_home) else load_env()
+    provider_config = ov._load_hermes_openviking_config(str(hermes_home))
+    env_values = ov._profile_openviking_env(str(hermes_home)) or {}
     active_path: Optional[Path] = None
     missing_profile = False
     invalid_profile = False
 
     if provider_config.get("use_ovcli_config"):
-        active_path = ov._resolve_ovcli_config_path(
-            str(provider_config.get("ovcli_config_path") or ""),
-            env_values=env_values,
+        active_path = ov._provider_ovcli_config_path(
+            provider_config, env=env_values, hermes_home=hermes_home
         )
         missing_profile = not active_path.is_file()
 
@@ -139,7 +122,8 @@ def snapshot(*, hermes_home: str | Path, probe_health: bool) -> dict:
         try:
             settings = ov._resolve_connection_settings(
                 provider_config,
-                env_values=env_values,
+                env=env_values,
+                hermes_home=hermes_home,
             )
         except (OSError, UnicodeError, ValueError):
             if not provider_config.get("use_ovcli_config"):
@@ -165,7 +149,7 @@ def snapshot(*, hermes_home: str | Path, probe_health: bool) -> dict:
     )
     source_type = _connection_type(settings.get("endpoint") or ov._DEFAULT_ENDPOINT)
     if active_profile is not None:
-        active_label = f"{ov._profile_display_name(active_profile)} ({source_type})"
+        active_label = f"{ov._setup._profile_display_name(active_profile)} ({source_type})"
     elif provider_config.get("use_ovcli_config"):
         active_label = "Missing profile"
     else:
@@ -200,15 +184,22 @@ def snapshot(*, hermes_home: str | Path, probe_health: bool) -> dict:
         if source_type == "OpenViking Service"
         else "custom"
     )
+    if provider_config.get("deployment") == ov.quick_local.DEPLOYMENT:
+        setup_type = "quick_local"
+        if not missing_profile and not invalid_profile:
+            active_label = "Quick Local"
     credential = "none"
     if settings.get("api_key"):
         credential = (
-            "root" if settings.get("account") or settings.get("user") else "user"
+            "root" if active_profile and active_profile.values.get("root_api_key") else "user"
         )
 
     return {
         "values": {
             "setup_type": setup_type,
+            "usage_profile": "shared"
+            if provider_config.get("recall_scope") == "shared"
+            else "personal",
             "profile_path": current_path,
             "profile_name": "openviking",
             "url": settings.get("endpoint") or ov._DEFAULT_ENDPOINT,
@@ -221,8 +212,7 @@ def snapshot(*, hermes_home: str | Path, probe_health: bool) -> dict:
         },
         "options": {
             "profile_path": [
-                _profile_payload(profile, active_path=active_path)
-                for profile in profiles
+                _profile_payload(profile, active_path=active_path) for profile in profiles
             ]
         },
         "summary": {
@@ -243,9 +233,7 @@ def connection_values(values: dict) -> tuple[dict, str]:
     ov = _ov()
     setup_type = ov._clean_config_value(values.get("setup_type"))
     if setup_type not in {"service", "custom"}:
-        raise ValueError(
-            "Choose OpenViking Service, Existing Profiles, or Custom Server."
-        )
+        raise ValueError("Choose OpenViking Service, Existing Profiles, or Custom Server.")
 
     endpoint = (
         ov._OPENVIKING_SERVICE_ENDPOINT
@@ -253,9 +241,7 @@ def connection_values(values: dict) -> tuple[dict, str]:
         else ov._clean_config_value(values.get("url"))
     )
     credential = (
-        "user"
-        if setup_type == "service"
-        else ov._clean_config_value(values.get("credential"))
+        "user" if setup_type == "service" else ov._clean_config_value(values.get("credential"))
     )
     if credential not in {"none", "user", "root"}:
         raise ValueError("Choose No API key, User API key, or Root API key.")
@@ -263,21 +249,22 @@ def connection_values(values: dict) -> tuple[dict, str]:
         raise ValueError("Remote OpenViking servers require an API key.")
 
     submitted_key = ov._clean_config_value(
-        values.get("api_key_service")
-        if setup_type == "service"
-        else values.get("api_key")
+        values.get("api_key_service") if setup_type == "service" else values.get("api_key")
     )
     api_key = "" if credential == "none" else submitted_key
     if credential != "none" and not api_key:
         raise ValueError("Enter an OpenViking API key.")
 
-    account = (
-        ov._clean_config_value(values.get("account")) if credential == "root" else ""
-    )
+    account = ov._clean_config_value(values.get("account")) if credential == "root" else ""
     user = ov._clean_config_value(values.get("user")) if credential == "root" else ""
     if credential == "root" and (not account or not user):
         raise ValueError("Account and User are required for a Root API key.")
 
+    for field, value in (("account", account), ("user", user)):
+        if value:
+            valid, message, _normalized = ov._validate_openviking_identity_value(value, field=field)
+            if not valid:
+                raise ValueError(message)
     actor_peer_id = ov._clean_config_value(values.get("actor_peer_id"))
     if "/" in actor_peer_id or "\\" in actor_peer_id:
         raise ValueError("Agent ID cannot contain '/' or '\\'.")
@@ -308,115 +295,128 @@ def validate_values(values: dict) -> tuple[dict, Optional[str]]:
             "or enter a User API key."
         )
     if credential == "root" and role == "user":
-        raise ValueError(
-            "This is a User API key. Select User API key, or enter a Root API key."
-        )
+        raise ValueError("This is a User API key. Select User API key, or enter a Root API key.")
     return connection, role
 
 
-def save(*, values: dict, hermes_home: str | Path, overwrite: bool) -> dict:
-    """Validate, persist, and link one complete Desktop setup transaction."""
-    from hermes_cli.config import load_config, reload_env, save_config
+def save(*, values: dict, hermes_home: str | Path, overwrite: bool, confirmations: dict) -> dict:
+    """Validate and provision before activating the profile; never mutate process env."""
+    from hermes_cli.config import _CONFIG_LOCK, load_config, save_config
+    from plugins.memory.desktop_setup import report_progress
+
+    from . import quick_local
 
     ov = _ov()
-    config = load_config()
-    if not isinstance(config.get("memory"), dict):
-        config["memory"] = {}
-    provider_config = config["memory"].get("openviking", {})
-    if not isinstance(provider_config, dict):
-        provider_config = {}
+    home = Path(hermes_home)
+    usage = values.get("usage_profile", "personal")
+    if usage not in {"personal", "shared"}:
+        raise ValueError("Choose Personal Agent or Shared Agent.")
+    if usage == "shared" and confirmations.get("shared") is not True:
+        raise MemoryProviderConfigConflictError(
+            "Shared Agent shares conversation history within each group or thread and recalls all senders under this OpenViking user. Apply this change and restart the Hermes gateway?",
+            confirmation="shared",
+        )
 
     setup_type = ov._clean_config_value(values.get("setup_type"))
-    if setup_type == "profile":
+    report_progress("validate", "Validating the selected OpenViking connection...")
+    if setup_type == "quick_local":
+        setup = quick_local.QuickLocalSetup(
+            health_check=ov._validate_openviking_reachability,
+            progress=lambda event: report_progress(event.stage.value, event.message),
+            allow_source_build=confirmations.get("source_build") is True,
+        )
+        try:
+            result = setup.provision(hermes_home=home, preflight=setup.preflight(home))
+        except quick_local.SourceBuildRequired as exc:
+            raise MemoryProviderConfigConflictError(str(exc), confirmation="source_build") from exc
+        except quick_local.QuickLocalSetupError as exc:
+            raise ValueError(str(exc)) from exc
+        path = result.paths.ovcli_config
+    elif setup_type == "profile":
         path = Path(ov._clean_config_value(values.get("profile_path"))).expanduser()
         if not path.is_file():
             raise OpenVikingProfileNotFoundError(
-                f"OpenViking profile file was not found: {path}"
+                "The selected OpenViking profile no longer exists. Refresh profiles and retry."
             )
         profile = ov._load_profile(path, source="saved", name=path.name)
         if profile is None:
-            raise ValueError(
-                "The selected OpenViking profile could not be read. "
-                "Refresh profiles or choose another profile."
-            )
-        require_api_key = not ov._is_local_openviking_url(
-            profile.values.get("endpoint", "")
-        )
+            raise ValueError("The selected OpenViking profile could not be read.")
         ok, message, _role = ov._validate_openviking_setup_values(
             profile.values,
-            require_api_key=require_api_key,
+            require_api_key=not ov._is_local_openviking_url(profile.values.get("endpoint", "")),
         )
         if not ok:
             raise ValueError(message)
     else:
         connection, _role = validate_values(values)
         profile_name = ov._clean_config_value(values.get("profile_name"))
-        if not ov._is_valid_ovcli_profile_name(profile_name):
+        if not ov._is_valid_ovcli_profile_name(profile_name) or profile_name == "active":
             raise ValueError(
-                "Profile names can only contain letters, numbers, '-' and '_'."
+                "Use a profile name with letters, numbers, '-' or '_'. The name 'active' is reserved."
             )
-        if profile_name == "active":
-            raise ValueError(
-                "The profile name 'active' is reserved by the OpenViking CLI."
-            )
-        path = (
-            ov._default_ovcli_config_path().parent
-            / f"{ov._OVCLI_SAVED_PREFIX}{profile_name}"
-        )
+        path = ov._default_ovcli_config_path().parent / f"{ov._OVCLI_SAVED_PREFIX}{profile_name}"
         new_data = ov._ovcli_data_from_connection_values(connection)
-        if path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Publish a new profile without replacing one concurrently created by
+        # another setup. Overwrite remains an explicit, atomic replacement.
+        with tempfile.TemporaryDirectory(prefix=".ov-setup-", dir=path.parent) as temporary:
+            staged = Path(temporary) / "profile.json"
+            ov.atomic_json_write(staged, new_data, mode=0o600)
             try:
-                existing_data = ov._load_ovcli_config(path)
-            except Exception:
-                existing_data = {}
-            if existing_data != new_data and not overwrite:
-                raise MemoryProviderConfigConflictError(
-                    "An OpenViking profile with this name already exists with different settings."
-                )
-        if not path.exists() or overwrite:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            ov.atomic_json_write(path, new_data, mode=0o600)
+                os.link(staged, path)
+            except FileExistsError:
+                try:
+                    existing_data = ov._load_ovcli_config(path)
+                except (OSError, UnicodeError, ValueError):
+                    existing_data = None
+                if existing_data != new_data:
+                    if not overwrite:
+                        raise MemoryProviderConfigConflictError(
+                            "An OpenViking profile with this name has different settings. Replace it?"
+                        )
+                    ov.atomic_json_write(path, new_data, mode=0o600)
 
-    update_process_env = _is_running_hermes_home(hermes_home)
-    ov._setup._link_ovcli_profile(
-        config=config,
-        provider_config=provider_config,
-        env_path=Path(hermes_home).expanduser() / ".env",
-        ovcli_path=path,
-        update_process_env=update_process_env,
+    report_progress("save", "Saving this Hermes profile's OpenViking settings...")
+    # Re-read after network/install work. The shared CLI helper owns connection-key
+    # cleanup; global environment mutation is explicitly disabled for Desktop.
+    previous = ov._load_hermes_openviking_config(str(home))
+    with _CONFIG_LOCK:
+        config = load_config()
+        memory = config.setdefault("memory", {})
+        provider_config = dict(memory.get("openviking") or {})
+        before = dict(provider_config)
+        ov._setup._link_ovcli_profile(
+            config=config,
+            provider_config=provider_config,
+            env_path=home / ".env",
+            ovcli_path=path,
+            update_process_env=False,
+            stop_previous=False,
+        )
+        if setup_type == "quick_local":
+            provider_config["deployment"] = quick_local.DEPLOYMENT
+        ov._setup._apply_usage_profile(config, provider_config, usage)
+        ov._write_env_vars(home / ".env", {}, remove_keys=("OPENVIKING_RECALL_SCOPE",))
+        changed = {
+            key: provider_config.get(key)
+            for key in before.keys() | provider_config.keys()
+            if before.get(key) != provider_config.get(key)
+        }
+        patch = {"memory": {"provider": "openviking", "openviking": changed}}
+        if usage == "shared":
+            patch.update(group_sessions_per_user=False, thread_sessions_per_user=False)
+        save_config(patch, merge_existing=True)
+    ov._setup._stop_previous_quick_local(previous, home, ovcli_path=path)
+    remaining_env = ov._profile_openviking_env(str(home)) or {}
+    restart_required = setup_type != "quick_local" and any(
+        remaining_env.get(key)
+        for key in (*ov._OPENVIKING_ENV_KEYS, ov._OVCLI_CONFIG_ENV, "OPENVIKING_RECALL_SCOPE")
     )
-    save_config(config)
-    if update_process_env:
-        reload_env()
-    return {"ok": True, "profile_path": str(path)}
-
-
-def start_local(url: str) -> dict:
-    ov = _ov()
-    endpoint = ov._normalize_openviking_url(url)
-    if not ov._is_local_openviking_url(endpoint):
-        return {
-            "ok": False,
-            "message": "Only a local OpenViking URL can be started from Desktop.",
-        }
-
-    reachable, _message = ov._validate_openviking_reachability(endpoint)
-    if reachable:
-        return {
-            "ok": True,
-            "message": "OpenViking is already running and ready to use.",
-        }
-
-    state, message = ov._start_local_openviking_server(endpoint)
-    if state != ov._LOCAL_SERVER_STARTED:
-        return {"ok": False, "message": message}
-    if not ov._wait_for_openviking_health(endpoint, timeout_seconds=15.0):
-        return {
-            "ok": False,
-            "message": (
-                "openviking-server started but did not become ready. It may need server "
-                "configuration. Run 'openviking-server init', then try again. "
-                f"Logs: {ov._openviking_server_log_path()}"
-            ),
-        }
-    return {"ok": True, "message": "OpenViking started and is ready to use."}
+    message = (
+        "OpenViking setup saved. Restart this Hermes connection to clear its previous environment settings."
+        if restart_required
+        else "OpenViking setup saved. Start a new chat to use it."
+    )
+    if usage == "shared":
+        message += " Restart the Hermes gateway to apply shared conversation history."
+    return {"ok": True, "profile_path": str(path), "message": message}
