@@ -80,7 +80,7 @@ import {
   writePlaygroundExpandedUris,
 } from './-lib/utils'
 
-export const Route = createFileRoute('/playground')({
+export const Route = createFileRoute('/filesystem')({
   validateSearch: (search: Record<string, unknown>): PlaygroundSearch => ({
     file: typeof search.file === 'string' ? search.file : undefined,
     panel:

@@ -1,6 +1,6 @@
 import { useDefaultConversationTitles } from '#/lib/sessions/use-default-conversation-titles'
 import { ConversationRow } from './-components/conversation-row'
-import { readPlaygroundAgentSessionIds } from '#/routes/playground/-lib/utils'
+import { readPlaygroundAgentSessionIds } from '#/routes/filesystem/-lib/utils'
 import { useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useQueries, useQuery } from '@tanstack/react-query'

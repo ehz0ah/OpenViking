@@ -1,6 +1,8 @@
 import type { TerminalCommandSuggestion } from './types'
 
 export const ROOT_URI = 'viking://'
+
+// Keep legacy storage keys so the page rename preserves saved layout and sessions.
 export const PLAYGROUND_LEFT_WIDTH_STORAGE_KEY =
   'openviking.playground.leftWidth'
 export const PLAYGROUND_RIGHT_WIDTH_STORAGE_KEY =

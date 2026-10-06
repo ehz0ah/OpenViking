@@ -29,7 +29,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
     ...actual,
     createFileRoute: () => (options: Record<string, unknown>) => ({
       ...options,
-      fullPath: '/playground',
+      fullPath: '/filesystem',
       options,
       useSearch: () => mocks.search,
     }),
