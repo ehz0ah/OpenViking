@@ -112,7 +112,8 @@ tested release baseline. It does not add server dependencies to Hermes.
 
 The `Hermes Plugin Tests` workflow runs this directory's complete external-provider
 suite on plugin changes, pushes to `main`/`develop`, and manual dispatch.
-It uses Python 3.14 and a reviewed Hermes commit, with test retries disabled.
+It uses Python 3.14 and reviewed Hermes commits for the existing baseline and
+the optional Desktop setup capability, with test retries disabled.
 When updating the host SHA in `.github/workflows/hermes-plugin-tests.yml`, check
 the host dependency pins and run the suite before submitting the change.
 These regression tests use mock responses and local test servers; live-service
