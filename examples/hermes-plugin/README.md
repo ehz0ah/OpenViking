@@ -351,10 +351,12 @@ the connected user's access permissions. Setup prints this policy before it exit
 
 To require Hermes approval for tools classified as writable, set `trust: untrusted`
 under `mcp_servers.openviking` in the profile's `config.yaml`, then reload MCP or
-restart Hermes. On the tested Hermes release, v2026.9.24, this also gates read-only
-tools; its classic CLI cannot display these approval prompts. The TUI can prompt,
-but unattended runs (`-q` and cron) cannot approve calls. See
-[compatibility details](DEVELOPMENT.md#mcp-host-compatibility).
+restart Hermes. Hermes builds containing [#133532](https://github.com/NousResearch/hermes-agent/pull/133532)
+recognize read-only tools such as `find`, `read` and `grep` correctly. `search`,
+`remember`, `write` and `forget` still require approval; unattended runs (`-q`
+and cron) cannot approve them. On the supported v2026.9.24 release, read-only
+tools also require approval; its classic CLI cannot display these prompts, but the TUI can. See
+[compatibility details](DEVELOPMENT.md#mcp-host-compatibility) before opting in.
 Automatic recall, capture and commits do not use this MCP approval gate.
 
 Existing trust settings, tool filters, timeouts, TLS
