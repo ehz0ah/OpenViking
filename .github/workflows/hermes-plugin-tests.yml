@@ -36,7 +36,7 @@ jobs:
             ref: 5bba024d8ddd388f56f354c1f789be825e3d8a3c
           # Reviewed companion: exercises Desktop setup instead of skipping it.
           - name: desktop-setup
-            ref: 3fa42858db98ed81c760b4fc20d361f802ab7760
+            ref: 29d4956856295189a59ee2eeadc435d46719fd15
     steps:
       - uses: actions/checkout@v6
         with:
