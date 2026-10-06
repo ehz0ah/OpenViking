@@ -131,7 +131,7 @@ const activity = {
         '请先在“连接设置”中配置 OpenViking Studio 身份凭证，或在下方临时粘贴 API 密钥完成验证。',
     },
   },
-  playground: {
+  filesystem: {
     copyUri: '复制当前 URI',
     copied: '已复制 URI',
     copyFailed: '复制失败',

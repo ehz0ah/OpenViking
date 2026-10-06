@@ -4,8 +4,10 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
   createIdentityStorageKey,
-  readPlaygroundExpandedUris,
-  writePlaygroundExpandedUris,
+  readFilesystemAgentSessionIds,
+  readFilesystemExpandedUris,
+  registerFilesystemAgentSessionId,
+  writeFilesystemExpandedUris,
 } from './utils'
 
 beforeEach(() => {
@@ -13,7 +15,7 @@ beforeEach(() => {
 })
 
 describe('createIdentityStorageKey', () => {
-  it('isolates persisted Playground state by identity scope', () => {
+  it('isolates persisted Filesystem state by identity scope', () => {
     const baseKey = 'openviking.playground.terminalEntryHistory'
 
     expect(createIdentityStorageKey(baseKey, 'account-a\u0000alice')).not.toBe(
@@ -31,17 +33,48 @@ describe('createIdentityStorageKey', () => {
   })
 })
 
-describe('Playground expanded directory persistence', () => {
+describe('Filesystem expanded directory persistence', () => {
   it('restores normalized expanded URIs for the same identity', () => {
-    writePlaygroundExpandedUris('account-a\u0000alice', [
+    const legacyKey = createIdentityStorageKey(
+      'openviking.playground.expandedUris',
+      'account-a\u0000alice',
+    )
+    localStorage.setItem(legacyKey, JSON.stringify(['viking://resources/old']))
+    expect(readFilesystemExpandedUris('account-a\u0000alice')).toEqual([
+      'viking://resources/old/',
+    ])
+
+    writeFilesystemExpandedUris('account-a\u0000alice', [
       'viking://user/default',
       'viking://resources/',
     ])
 
-    expect(readPlaygroundExpandedUris('account-a\u0000alice')).toEqual([
+    expect(readFilesystemExpandedUris('account-a\u0000alice')).toEqual([
       'viking://user/default/',
       'viking://resources/',
     ])
-    expect(readPlaygroundExpandedUris('account-a\u0000bob')).toEqual([])
+    expect(readFilesystemExpandedUris('account-a\u0000bob')).toEqual([])
+    expect(JSON.parse(localStorage.getItem(legacyKey)!)).toEqual([
+      'viking://user/default',
+      'viking://resources/',
+    ])
   })
+})
+
+it('preserves legacy Agent history without sharing it across identities', () => {
+  const legacyKey = createIdentityStorageKey(
+    'openviking.playground.agentSessions',
+    'account-a\u0000alice',
+  )
+  localStorage.setItem(legacyKey, JSON.stringify(['existing-session']))
+
+  expect(readFilesystemAgentSessionIds('account-a\u0000alice')).toEqual([
+    'existing-session',
+  ])
+  registerFilesystemAgentSessionId('new-session', 'account-a\u0000alice')
+  expect(JSON.parse(localStorage.getItem(legacyKey)!)).toEqual([
+    'new-session',
+    'existing-session',
+  ])
+  expect(readFilesystemAgentSessionIds('account-a\u0000bob')).toEqual([])
 })

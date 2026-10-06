@@ -5,15 +5,22 @@ import { expect, it } from 'vitest'
 
 import { routeTree } from '#/routeTree.gen'
 
-it.each(['', '/studio'])(
-  'redirects old bookmarks under %s without losing their selection',
-  async (basepath) => {
+it.each(
+  ['', '/studio'].flatMap((basepath) =>
+    ['/playground', '/playground/'].map((path) => ({
+      basepath,
+      bookmark: `${basepath}${path}`,
+    })),
+  ),
+)(
+  'redirects old $bookmark bookmarks without losing their selection',
+  async ({ basepath, bookmark }) => {
     const router = createRouter({
       routeTree,
       basepath,
       history: createMemoryHistory({
         initialEntries: [
-          `${basepath}/playground?file=viking%3A%2F%2Fresources%2Fguide.md&uri=viking%3A%2F%2Fresources%2F&panel=agent&session=session-123&upload=true#L10`,
+          `${bookmark}?file=viking%3A%2F%2Fresources%2Fguide.md&uri=viking%3A%2F%2Fresources%2F&panel=agent&session=session-123&upload=true#L10`,
         ],
       }),
     })

@@ -138,7 +138,7 @@ const activity = {
         'Sign in to OpenViking Studio (Connection & Identity) or paste an API key below to verify.',
     },
   },
-  playground: {
+  filesystem: {
     copyUri: 'Copy current URI',
     copied: 'URI copied',
     copyFailed: 'Copy failed',

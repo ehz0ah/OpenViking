@@ -37,7 +37,7 @@ const resources = {
       description: 'Failed to load audited request logs from the server.',
       title: 'Request failed',
     },
-    eyebrow: 'Filesystem telemetry',
+    eyebrow: 'Server API telemetry',
     filters: {
       all: 'All logs',
       apiTypePlaceholder: 'API type',

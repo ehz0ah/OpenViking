@@ -35,7 +35,7 @@ const resources = {
       description: '无法从服务端加载审计请求日志。',
       title: '请求失败',
     },
-    eyebrow: '文件系统请求记录',
+    eyebrow: '服务端 API 请求记录',
     filters: {
       all: '所有日志',
       apiTypePlaceholder: 'API 类型',
