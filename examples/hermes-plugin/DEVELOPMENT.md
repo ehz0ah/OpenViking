@@ -14,7 +14,7 @@ Contributions to this directory are provided under its [MIT license](LICENSE).
 Preserve the existing copyright and permission notice.
 
 The distribution name is `hermes-plugin-openviking`. The provider, plugin, and
-future Hermes catalog key remain `openviking`. Existing `memory.openviking`
+Hermes catalog key remain `openviking`. Existing `memory.openviking`
 settings, environment variables, linked `ovcli.conf` files, data paths, and
 `viking_*` tools keep their current behavior.
 
@@ -97,8 +97,10 @@ Hermes PR [#131267](https://github.com/NousResearch/hermes-agent/pull/131267)
 published the catalog entry. Hermes PR
 [#114569](https://github.com/NousResearch/hermes-agent/pull/114569) added catalog
 recovery for configured providers that no longer resolve. Keep the reviewed
-catalog pin and migration path valid before an in-tree provider is removed. A
-bundled provider takes precedence while it remains present.
+catalog pin and migration path valid. Hermes PR
+[#134350](https://github.com/NousResearch/hermes-agent/pull/134350) removed the
+bundled OpenViking provider from main. Older releases still load their bundled
+copy first.
 
 This plugin does not add a Desktop `config_schema.py`.
 The wizard uses private helpers from `hermes_cli.memory_setup`; changes to

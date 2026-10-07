@@ -1,80 +1,59 @@
-# OpenViking Memory Provider
+# OpenViking for Hermes
 
-Context database by Volcengine (ByteDance) with filesystem-style knowledge hierarchy, tiered retrieval, and automatic memory extraction.
+Long-term memory and searchable knowledge for Hermes Agent. OpenViking captures
+conversations, extracts useful memories and recalls them in later sessions.
+Six tools let Hermes search, read and browse knowledge, save facts, remove
+memories and add resources.
 
-This plugin connects Hermes to OpenViking for long-term memory and knowledge
-retrieval. The installation steps below use a reviewed OpenViking commit.
+## Get started
 
-Hermes distributes the provider through its plugin catalog. Releases that still
-include an in-tree OpenViking provider do not need a separate installation and
-load their bundled copy first. Existing profiles keep the provider name,
-settings, and stored data when they move to the catalog plugin.
-
-For development and licensing details, see [DEVELOPMENT.md](DEVELOPMENT.md).
-
-## Install
-
-### Catalog installation
-
-Install and configure the provider in the same Hermes profile:
+Run these commands in the Hermes profile you want to configure:
 
 ```bash
-hermes plugins install openviking
+hermes plugins install openviking --enable
 hermes memory setup openviking
-hermes memory status
+hermes
 ```
 
-Skip the install command on a Hermes release that still bundles OpenViking.
-When a Hermes update removes the bundle from a profile already configured with
-`memory.provider: openviking`, Hermes attempts to install the catalog plugin
-automatically.
-If migration reports an installation failure, run the command above in that
-profile. The provider name, connection settings, and stored OpenViking data do
-not change.
+In setup, choose **Personal Agent** or **Shared Agent**, then choose a connection:
 
-### Pinned direct installation
+| Connection | What you need |
+|------------|---------------|
+| **Quick Local** | A supported LLM already configured in Hermes. Setup installs a private OpenViking server and downloads a local embedding model. |
+| **OpenViking Service** | Your OpenViking Service API key. |
+| **Custom** | The URL and credentials of your own OpenViking server. |
+
+Quick Local checks the LLM and starts the server before setup finishes.
+Embeddings run locally; memory extraction uses the configured LLM, which can be
+a remote service. Memories become available after capture is committed and
+extraction completes. See [Setup](#setup) for supported models and server controls.
+
+To view the saved provider configuration, run `hermes memory status`.
+`available` means configured; it does not prove server health or extraction.
+
+## Update
+
+```bash
+hermes plugins update openviking
+```
+
+Restart Hermes or the gateway afterward. Updates use the reviewed catalog pin
+and retain your connection settings and server data. For direct source installs,
+use [Pinned source installation](#pinned-source-installation) instead.
+
+## Existing users
+
+Your provider name, connection settings and OpenViking data stay the same.
+When a Hermes update removes the bundled provider, Hermes attempts to install
+the catalog plugin for profiles already using `memory.provider: openviking`.
+If that fails, run the install command above in that profile.
+
+Older Hermes releases load their bundled copy first. You can keep using it with
+`hermes memory setup openviking`; Quick Local and other external-plugin changes
+become active after that copy is removed.
 
 Validated with Hermes v2026.9.24. CI also checks the reviewed Hermes main
 commit pinned in the [test workflow](../../.github/workflows/hermes-plugin-tests.yml).
-
-For a direct installation, replace the placeholder with the reviewed OpenViking
-commit's full 40-character SHA:
-
-```bash
-hermes plugins install 'https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin' \
-  --ref '<full-40-character-commit-SHA>' --no-enable
-hermes plugins enable openviking
-hermes memory setup openviking
-hermes memory status
-```
-
-The equivalent shorthand is `volcengine/OpenViking/examples/hermes-plugin`.
-Hermes installs this directory as `$HERMES_HOME/plugins/openviking/`.
-In this two-step flow, Hermes resolves its `pyproject.toml` dependencies under
-Hermes's dependency constraints when you enable the plugin.
-
-A Hermes release with an in-tree OpenViking provider loads that copy first. The
-external copy becomes active after the in-tree copy is removed.
-Keep `memory.provider: openviking` and your existing configuration. No memory
-data needs to move.
-
-## Upgrade
-
-For a direct subdirectory installation, use force-reinstallation instead of
-`hermes plugins update openviking`. Hermes does not retain the repository's
-`.git` directory when it installs a subdirectory.
-
-Replace the placeholder with the reviewed OpenViking commit's full 40-character
-SHA, and run this command in the same Hermes profile as the original installation:
-
-```bash
-hermes plugins install 'volcengine/OpenViking/examples/hermes-plugin' \
-  --force --ref '<full-40-character-commit-SHA>' --enable
-```
-
-Existing connection settings and server data are retained. Restart Hermes or
-the gateway after the upgrade. For catalog installations, use
-`hermes plugins update openviking`.
 
 ## Requirements
 
@@ -195,7 +174,8 @@ Setup first asks how the Hermes instance is used:
 Shared Agent requires confirmation before it sets `group_sessions_per_user` and
 `thread_sessions_per_user` to `false`. Different groups still have separate
 conversation histories. Restart the gateway to apply changed session settings.
-Personal Agent does not make an already shared conversation private.
+Personal Agent changes recall scope and keeps existing conversation-sharing
+settings.
 
 Both presets retain sender attribution during capture. After commit and
 extraction, OpenViking can recall those memories across chats according to the
@@ -352,6 +332,10 @@ when participants require separate access rights.
 | `viking_forget` | Delete one exact `viking://` memory file URI |
 | `viking_add_resource` | Ingest URLs/docs into the knowledge base |
 
+Automatic capture and recall use Hermes's memory-provider interface. The catalog's
+hook list is not a full feature list: it does not list per-turn capture, recall
+or these provider tools.
+
 ## Memory Writes And Deletes
 
 `viking_remember` creates a one-shot `hermes-remember-<random>` OpenViking
@@ -490,3 +474,32 @@ context. Startup recovery can still commit pending messages from earlier session
 Explicit `viking_*` tools keep their normal behavior, including writes and deletes.
 Interactive sessions (and hosts that predate `agent_context`) keep the previous
 automatic write behavior.
+
+## Pinned source installation
+
+Use this flow only when you need a specific reviewed commit instead of the
+catalog version. Replace the placeholder with its full 40-character SHA:
+
+```bash
+hermes plugins install 'volcengine/OpenViking/examples/hermes-plugin' \
+  --ref '<full-40-character-commit-SHA>' --no-enable
+hermes plugins enable openviking
+hermes memory setup openviking
+```
+
+Hermes installs the plugin in `$HERMES_HOME/plugins/openviking/` and resolves
+its dependencies under Hermes's constraints when you enable it.
+
+Direct subdirectory installs do not retain a `.git` directory. To update one,
+force-reinstall the reviewed commit in the same profile:
+
+```bash
+hermes plugins install 'volcengine/OpenViking/examples/hermes-plugin' \
+  --force --ref '<full-40-character-commit-SHA>' --enable
+```
+
+Connection settings and server data are retained. Restart Hermes or the gateway
+after updating.
+
+For development, migration coordination and the MIT license, see
+[DEVELOPMENT.md](DEVELOPMENT.md).

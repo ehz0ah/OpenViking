@@ -9,7 +9,7 @@ is installed from the plugin catalog or bundled in Hermes.
 On a catalog-based Hermes build, run:
 
 ```bash
-hermes plugins install openviking
+hermes plugins install openviking --enable
 ```
 
 Skip this command if your Hermes release still bundles OpenViking. The bundled
@@ -18,26 +18,39 @@ bundle from a home that already uses `memory.provider: openviking`, Hermes
 attempts to install the catalog plugin automatically. If migration cannot
 install it, run the command above in the same Hermes profile.
 
-## Keep the Python environments separate
-
-Hermes connects to OpenViking over HTTP, so OpenViking does not need to be
-installed in the Hermes Python environment. Run the OpenViking server in its
-own virtual environment or container. Do not use `--force-reinstall` to add or
-upgrade OpenViking in an existing Hermes environment: a Hermes release may pin
-dependency versions that differ from OpenViking's supported, security-patched
-versions. If you intentionally combine both applications in one environment,
-resolve them together and run `python -m pip check` before starting either
-service.
-
-## Setup
+## Setup and chat
 
 ```bash
 hermes memory setup openviking
+hermes
 ```
 
-- Cloud: keep **OpenViking Service (VolcEngine Cloud)**, paste the API key
-- Custom: URL (default `http://127.0.0.1:1933`) and API key; leave the key empty for local dev
-- Reuse an existing `ovcli.conf` profile if the wizard offers one
+Choose **Personal Agent** or **Shared Agent**, then choose a connection:
+
+- **Quick Local**: reuse a supported LLM configured in Hermes. Setup installs a
+  private OpenViking server and a local embedding model, checks the LLM and
+  starts the server. Extraction can use a remote LLM.
+- **OpenViking Service**: enter your service API key.
+- **Custom**: enter your server URL and credentials, or reuse an `ovcli.conf`
+  profile if the wizard offers one.
+
+Quick Local requires the external provider to be active. It keeps its server
+running after Hermes exits. Other self-hosted servers should run in their own
+Python environment or container; Hermes connects over HTTP.
+
+After conversations are captured, OpenViking commits and extracts memories
+for later recall. Setup does not change existing server data.
+
+## Update
+
+For a catalog installation:
+
+```bash
+hermes plugins update openviking
+```
+
+Restart Hermes or the gateway afterward. Connection settings and server data
+are retained.
 
 ## Verify
 
@@ -51,6 +64,6 @@ connectivity or confirm memory extraction.
 ## See also
 
 - [Capability Reference](./16-capability-reference.md)
-- [Hermes — OpenViking memory provider docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking) — full setup guide and configuration options
+- [OpenViking plugin page](https://hermes-agent.nousresearch.com/docs/plugins/openviking) — full setup guide and configuration options
 - [Deployment Guide](../guides/03-deployment.md) — setting up your OpenViking server
 - [Authentication](../guides/04-authentication.md) — API key setup for remote access
