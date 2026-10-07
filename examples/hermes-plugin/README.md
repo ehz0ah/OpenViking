@@ -100,7 +100,7 @@ not exist.
 
 For a new connection, choose **OpenViking Service**, **Custom**, or **Quick Local**.
 
-Quick Local installs OpenViking 0.4.22 in a private runtime. It uses
+Quick Local installs the latest compatible OpenViking 0.4 release in a private runtime. It uses
 `bge-small-zh-v1.5-f16` for local embeddings and copies the configured Hermes LLM
 settings for memory extraction. The LLM must use a static API key or Hermes's
 local llama.cpp server, with an OpenAI-compatible or Anthropic-compatible API.

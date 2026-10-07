@@ -674,7 +674,7 @@ memory provider：
 
 - **目录插件**在本仓库的
   [`examples/hermes-plugin`](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin)
-  中维护。先运行 `hermes plugins install openviking`，再运行
+  中维护。先运行 `hermes plugins install openviking --enable`，再运行
   `hermes memory setup openviking`。
 - **内置 provider** 存在于旧版 Hermes 的 `plugins/memory/openviking` 中，
   无需安装。本页的 Hermes 行描述

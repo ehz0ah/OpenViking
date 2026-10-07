@@ -57,16 +57,18 @@ the PID, creation time, executable and config path before stopping a process.
 It repairs permissions on plugin-owned private files after backup restoration;
 no Hermes backup changes are required.
 
-`local_packages.py` selects reviewed OpenViking and llama-cpp-python binaries
-with SHA-256 verification before installation. Both PM and pre-PM installers
-receive verified local wheel files. Setup records the applied requirements so
-that a later pin change updates an existing private runtime. Update pins only after installation,
+`local_packages.py` selects compatible OpenViking wheels from PyPI and reviewed
+llama-cpp-python binaries, with SHA-256 verification before installation. Both PM
+and pre-PM installers receive verified local wheel files. Setup records the applied
+requirements so that a newer server release or native package pin updates an
+existing private runtime. Change native package pins only after installation,
 model and service checks pass on the listed platforms. Source builds require
 explicit consent. Platform CI runs real installation, local embedding, capture,
 restart and port-recovery checks. It uses a static test LLM configuration and
 does not establish live memory extraction; that remains a release check.
-The reviewed hashes cover the OpenViking and llama-cpp-python wheels only.
-PM/uv resolve the other dependencies; this is not a fully locked server runtime.
+The OpenViking hash comes from PyPI at setup time; llama-cpp-python hashes are
+fixed in this plugin. PM/uv resolve the other dependencies; this is not a fully
+locked server runtime.
 Source builds use package version pins without reviewed binary hashes. A platform
 needs a tested OpenViking/embedding-wheel pair for the prebuilt path.
 Setup also checks LLM access through the installed OpenViking backend. The CI

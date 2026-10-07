@@ -675,7 +675,7 @@ provider name `openviking`:
 
 - The **catalog plugin** is maintained in this repository under
   [`examples/hermes-plugin`](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin).
-  Install it with `hermes plugins install openviking`, then run
+  Install it with `hermes plugins install openviking --enable`, then run
   `hermes memory setup openviking`.
 - The **bundled provider** exists in earlier Hermes releases under
   `plugins/memory/openviking` and needs no installation. The Hermes rows on this
