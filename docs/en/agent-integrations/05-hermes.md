@@ -16,8 +16,9 @@ Accept the dependency prompt during installation. If your Hermes release still
 includes OpenViking, skip the install command. That release uses its built-in
 copy and does not provide Quick Local.
 
-Conversation history follows the current chat. Long-term memory saves useful
-facts for later chats. Common memory is not linked to a sender.
+Hermes uses conversation history to follow the current chat. OpenViking saves
+useful facts as long-term memory for later chats. Common memory is not linked
+to a sender.
 
 Choose **Personal Agent** to recall common memory and the current sender's
 memory while keeping your conversation history settings. Choose **Shared Agent**
@@ -35,8 +36,9 @@ Then choose a connection:
 - **Custom** connects to your own server with its URL and credentials. Setup
   can also reuse a saved `ovcli.conf`.
 
-After setup, chat as usual. Memories become available after OpenViking commits
-the captured conversation and finishes extraction. Existing server data is kept.
+After setup, chat as usual. The plugin requests a commit at 20,000 pending
+tokens by default, at session end and when switching sessions. Memories become
+available after OpenViking finishes extraction. Existing server data is kept.
 
 Quick Local keeps its server running after Hermes exits. See the
 [plugin guide](https://hermes-agent.nousresearch.com/docs/plugins/openviking)

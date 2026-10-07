@@ -670,8 +670,8 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### Hermes
 
-[Hermes Agent](./05-hermes.md). Hermes supports two distribution states for the
-provider name `openviking`:
+[Hermes Agent](./05-hermes.md). Depending on its version, Hermes uses the catalog
+plugin or the built-in provider named `openviking`:
 
 - The **catalog plugin** is maintained in this repository under
   [`examples/hermes-plugin`](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin).

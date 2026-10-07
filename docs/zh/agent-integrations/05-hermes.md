@@ -31,8 +31,8 @@ hermes
   无需安装服务端或配置本地模型。
 - **Custom** 使用 URL 和凭据连接自己的服务，也可以复用已保存的 `ovcli.conf`。
 
-配置后正常聊天即可。OpenViking 提交捕获的对话并完成抽取后，记忆才能被召回。
-已有服务端数据会保留。
+配置后正常聊天即可。插件默认在待提交内容达到 20,000 tokens、会话结束或切换时
+请求提交。OpenViking 完成抽取后，记忆才能被召回。已有服务端数据会保留。
 
 Quick Local 服务在 Hermes 退出后仍会运行。支持的模型、服务控制命令和已知本地
 embedding 问题见[插件指南](https://hermes-agent.nousresearch.com/docs/plugins/openviking)。

@@ -27,9 +27,9 @@ The default profile uses `~/.hermes/.env`. A named profile uses
 
 Quick Local copies Hermes's language model settings into its own server config.
 It supports a static API key or Hermes's local llama.cpp server through an
-OpenAI-compatible or Anthropic-compatible API. It cannot copy OAuth or
-credentials that need a cloud provider's own authentication. Use Custom for
-those connections.
+OpenAI-compatible or Anthropic-compatible API. OAuth logins and credentials
+that need a cloud provider's own authentication are not supported. For those
+models, use a Custom server with its own model configuration.
 
 Google AI Studio uses its OpenAI-compatible endpoint. Static OpenAI and xAI
 keys use Chat Completions, so the model must support that API. Kimi Coding keeps
@@ -97,7 +97,7 @@ home address requires OpenViking 0.4.16 or newer for user and admin keys, or
 | Environment variable | Default | Description |
 |---------|---------|-------------|
 | `OPENVIKING_ENDPOINT` | `http://127.0.0.1:1933` | Server URL |
-| `OPENVIKING_API_KEY` | (none) | User/admin API key for authenticated servers |
+| `OPENVIKING_API_KEY` | (none) | API key for authenticated servers |
 | `OPENVIKING_ACCOUNT` | `default` | Tenant account for local/trusted mode |
 | `OPENVIKING_USER` | `default` | Tenant user for local/trusted mode |
 | `OPENVIKING_AGENT` | (none) | Optional peer ID for separate assistant context |
@@ -106,8 +106,8 @@ User and admin API keys let OpenViking derive account/user identity from the key
 In local or trusted deployments without an API key,
 Hermes sends `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` as identity headers.
 Hermes also sends `User-Agent: openviking-memory-hermes/<version>` on
-OpenViking requests. This standard harness identifier contains the Hermes
-version, but no per-user identifier, and does not add a separate request.
+OpenViking requests. This header contains the Hermes version. It does not
+contain a user identifier or require an extra request.
 
 ### Optional peer identity
 

@@ -6,7 +6,7 @@ or configure local models. Activate the service and create an API key in the
 [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing).
 Open **User Management**, then **API Key**.
 
-## Install and setup
+## Set up
 
 Run these commands in the Hermes profile you want to use:
 

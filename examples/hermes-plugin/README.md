@@ -56,7 +56,8 @@ or configure local models.
 
 After setup, chat as usual. Memories become available after the captured
 conversation is committed and OpenViking finishes extraction. The plugin
-commits at 20,000 pending tokens, at session end and when switching sessions.
+requests a commit at 20,000 pending tokens by default, at session end and when
+switching sessions.
 
 The plugin sends conversation turns, tool results and edits to `MEMORY.md`
 and `USER.md` to your OpenViking server. Memory extraction can use a remote model.
@@ -87,7 +88,8 @@ Hermes model or API key. Your data and downloaded model are kept.
 calls overlap, such as during indexing and recall. This affects Quick Local
 and Custom servers using that local backend. It does not affect connections
 using remote embedding APIs. The [fix](https://github.com/volcengine/OpenViking/pull/5548)
-is merged but is not in those releases.
+is merged and is expected in OpenViking 0.4.24. After that release, run Quick
+Local setup again to upgrade.
 
 The server keeps running after Hermes exits. These commands are optional:
 
@@ -148,9 +150,9 @@ server without checking for updates.
 
 ## Existing users
 
-When Hermes removes its built-in OpenViking provider, it attempts to install
-the catalog plugin for profiles already using OpenViking. Your settings and
-server data are kept. If installation fails, run the install command above
+If a Hermes update removes its built-in OpenViking provider, it attempts to
+install the catalog plugin for profiles already using OpenViking. Your settings
+and server data are kept. If installation fails, run the install command above
 in that profile.
 
 Older Hermes releases load their built-in copy first. On those releases,
@@ -190,8 +192,7 @@ in `$HERMES_HOME/openviking/`.
 - OpenViking 0.2.14 or newer for Custom connections.
 
 Tested with Hermes v2026.9.24 and the Hermes main commit used in
-[CI](../../.github/workflows/hermes-plugin-tests.yml). The release test loads
-the external plugin with the built-in copy removed.
+[CI](../../.github/workflows/hermes-plugin-tests.yml).
 
 ## Config
 
