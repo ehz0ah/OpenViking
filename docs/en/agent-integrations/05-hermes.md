@@ -52,6 +52,10 @@ hermes plugins update openviking
 Restart Hermes or the gateway afterward. Connection settings and server data
 are retained.
 
+To update a Quick Local server, run `hermes memory setup openviking` again and
+select Quick Local. Setup selects the latest compatible OpenViking 0.4 release;
+normal chat reuses the installed server.
+
 ## Verify
 
 ```bash

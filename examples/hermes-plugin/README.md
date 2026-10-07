@@ -43,6 +43,11 @@ Restart Hermes or the gateway afterward. Updates use the reviewed catalog pin
 and retain your connection settings and server data. For direct source installs,
 use [Pinned source installation](#pinned-source-installation) instead.
 
+To update a Quick Local server, run `hermes memory setup openviking` again and
+select Quick Local. Setup checks for the latest compatible OpenViking release
+in the 0.4 series and restarts this profile's server if needed. Normal chat and
+server recovery reuse the installed runtime without checking for updates.
+
 ## Existing users
 
 Your provider name, connection settings and OpenViking data stay the same.
@@ -117,8 +122,9 @@ running so the first Hermes turn can use memory. On later starts, Hermes starts
 the server in the background if it has stopped. The embedding model downloads once, about
 46 MiB. The LLM can still use a remote API. Server logs are in
 `$HERMES_HOME/logs/openviking-server.log`.
-The first installation needs network access. It downloads prebuilt packages
-with pinned hashes on macOS 14+ (Apple Silicon), Linux with glibc 2.31+
+Setup needs network access. It selects a compatible OpenViking release from PyPI
+and verifies its download hash. The native embedding package stays pinned and
+hash-verified on macOS 14+ (Apple Silicon), Linux with glibc 2.31+
 (x86-64 or ARM64), and Windows x86-64. Setup asks before a source build on
 other platforms. A source build needs native development tools and can take
 several minutes. You can choose Custom instead and use a separate server.
@@ -333,10 +339,6 @@ when participants require separate access rights.
 | `viking_remember` | Submit a fact through OpenViking session memory extraction |
 | `viking_forget` | Delete one exact `viking://` memory file URI |
 | `viking_add_resource` | Ingest URLs/docs into the knowledge base |
-
-Automatic capture and recall use Hermes's memory-provider interface. The catalog's
-hook list is not a full feature list: it does not list per-turn capture, recall
-or these provider tools.
 
 ## Memory Writes And Deletes
 

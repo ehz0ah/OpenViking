@@ -45,6 +45,9 @@ hermes plugins update openviking
 
 更新后重启 Hermes 或 gateway。连接设置和服务端数据会保留。
 
+如需更新 Quick Local 服务，再次运行 `hermes memory setup openviking` 并选择
+Quick Local。向导选择最新兼容的 OpenViking 0.4 版本；正常聊天复用已安装的服务。
+
 ## 验证
 
 ```bash
