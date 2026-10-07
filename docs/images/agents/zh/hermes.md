@@ -1,119 +1,58 @@
-## 步骤1：安装
+# 为 Hermes 配置 OpenViking Service
 
-1. 使用目录插件的 Hermes 版本需要先安装 OpenViking 提供方：
+## 安装和配置
 
-   ```bash
-   hermes plugins install openviking --enable
-   ```
+在要使用的 Hermes profile 中运行：
 
-   如果当前 Hermes 版本仍内置 OpenViking，请跳过此命令。当更新移除内置副本时，
-   已配置 OpenViking 的 profile 会自动尝试安装目录插件。
+```bash
+hermes plugins install openviking --enable
+hermes memory setup openviking
+```
 
-2. 启动 OpenViking 记忆配置向导：
+安装时接受依赖安装提示。如果当前 Hermes 版本已内置 OpenViking，请跳过安装命令。
 
-   ```bash
-   hermes memory setup openviking
-   ```
+在向导中：
 
-向导会先询问 **Personal Agent** 或 **Shared Agent**，请选择适合当前 Hermes
-使用方式的选项。
+1. 选择 **Personal Agent** 可召回公共记忆和当前发送者的记忆，并保留现有历史设置。
+   选择 **Shared Agent** 可在每个群组或话题内共享历史，召回同一 OpenViking 用户
+   下所有发送者的记忆。Shared Agent 会要求确认。
+2. 若出现配置来源选项，选择 **Create new OpenViking profile**。也可以复用已保存的
+   `ovcli.conf`。
+3. 选择 **OpenViking Service (VolcEngine Cloud)**。
+4. 输入服务 API Key。
+5. 选择保存位置。**Keep in Hermes only** 保存到 Hermes 的 `.env`。
+   **Mirror to OpenViking store** 保存到本地 `ovcli.conf.<name>` 并关联到 Hermes。
+   两种方式都会将凭据保存在当前电脑。
+6. 保存 OpenViking profile 时，填写名称，例如 `hermes`。这只是本地配置名称，
+   不会创建用户或改变访问权限。
 
-3. 如果本地已有 `ovcli.conf` 配置，向导会询问配置来源；否则会直接开始创建新配置：
+然后启动新的 Hermes 会话：
 
-   ```text
-   OpenViking config source
-     ↑↓ navigate  ENTER/SPACE select  ESC cancel
-    → (●) Use existing OpenViking profile - choose from detected ovcli.conf profiles
-      (○) Create new OpenViking profile - enter a new URL/API key
-   ```
+```bash
+hermes
+```
 
-   选项说明：
+外部插件还提供 **Quick Local**，可复用受支持的 Hermes LLM，安装本地服务和
+embedding 模型。要求和已知问题见[插件指南](https://hermes-agent.nousresearch.com/docs/plugins/openviking)。
 
-   - 复用现有 Profile：直接读取本地已有的 `ovcli.conf` 中的 OpenViking 地址和密钥，无需重复填写。
-   - 新建 Profile：需手动输入 OpenViking 服务的访问 URL 和 API 密钥，适合首次配置或连接新实例的场景。
+## 查看状态
 
-4. 若选择「Create new OpenViking profile」，将出现连接方式选择，请选择「OpenViking Service (VolcEngine Cloud)」：
+```bash
+hermes memory status
+```
 
-   ```text
-   OpenViking connection
-     ↑↓ navigate  ENTER/SPACE select  ESC cancel
-
-    → (●) OpenViking Service (VolcEngine Cloud) - use the managed OpenViking endpoint
-      (○) Custom - use a local, VPS, or self-hosted OpenViking server
-      (○) Quick Local - install local embeddings; use the configured Hermes LLM
-   ```
-
-下列步骤以 OpenViking Service 为例。外部插件也可选择 **Quick Local**，复用
-Hermes 已配置且受支持的 LLM，并安装独立服务和本地 embedding 模型；该方式跳过
-下列第 5–7 步。旧版内置副本不提供 Quick Local。
-
-5. 填入 API KEY：
-
-   ```text
-   {{OPENVIKING_API_KEY}}
-   ```
-
-6. 选择配置保存方式，建议选择「Mirror to OpenViking store」：
-
-   ```text
-   Save OpenViking config
-     ↑↓ navigate  ENTER/SPACE select  ESC cancel
-      (○) Keep in Hermes only - write values only to Hermes .env
-    → (●) Mirror to OpenViking store - write ~/.openviking/ovcli.conf.<name> and link it
-   ```
-
-7. 填写「OpenViking profile name」，例如 `hermes`：Hermes 的多租户能力可隔离不同 Profile 的模型、记忆、配置及凭据。建议为每个 Hermes Profile 配置独立的 OpenViking 环境或身份，并在此填写一个便于识别的本地配置名称，以区分对应的 OpenViking 配置。该名称仅用于本地标识，不会创建新用户，也不会改变账号身份或权限。
-8. 配置完成后将显示如下确认信息：
-
-   ```text
-   OpenViking memory is ready
-     Created and linked OpenViking profile.
-     Config file: ~/.openviking/ovcli.conf.hermes
-     Start a new Hermes session to activate.
-   ```
-
-新连接默认使用用户记忆，不设置助手 peer；向导不再询问 peer ID。如需隔离助手
-上下文，可在当前 Hermes profile 的 `config.yaml` 中设置 `memory.openviking.agent`。
-已有的 peer 记忆不会迁移。
-
-## 步骤2：验证
-
-1. 执行以下命令验证记忆插件状态：
-
-   ```bash
-   hermes memory status
-   ```
-
-2. 确认已选择并配置 OpenViking。`available` 不会检查服务端连通性，也不代表记忆已完成抽取：
-
-   ```text
-   Memory status
-   ────────────────────────────────────────
-     Built-in (MEMORY.md / USER.md):
-       Memory injection:   enabled ✓
-       User profile:       enabled ✓
-       Memory tool:        enabled ✓
-     Provider:  openviking
-
-     openviking config:
-       use_ovcli_config: True
-       ovcli_config_path: ~/.openviking/ovcli.conf.hermes
-       endpoint: https://api.vikingdb.cn-beijing.volces.com/openviking
-
-     Plugin:    installed ✓
-     Status:    available ✓
-
-   ```
+确认 provider 为 `openviking`，状态为 `available`。这只表示配置已保存，
+不代表服务健康或记忆抽取成功。
 
 ## 故障排查
 
 | 问题 | 处理 |
-|---|---|
-| OpenViking 插件未安装 | 在当前 Hermes profile 中运行 `hermes plugins install openviking --enable` |
-| Provider 不是 openviking | 重跑 `hermes memory setup openviking` |
-| Status 不是 available | 检查 endpoint 配置和关联的 OpenViking 配置文件 |
+|------|------|
+| 插件未安装 | 在该 profile 中运行 `hermes plugins install openviking --enable`。 |
+| 使用了其他 provider | 重新运行 `hermes memory setup openviking`。 |
+| 状态不是 available | 检查保存的连接设置和关联的 `ovcli.conf`。 |
 
-## 参考
+## 更多信息
 
-- 手动配置文档：[Hermes](https://docs.openviking.net/zh/agent-integrations/05-hermes)
-- 原理说明：[OpenViking memory provider](https://hermes-agent.nousresearch.com/docs/plugins/openviking)
+- [Hermes 集成](https://docs.openviking.net/zh/agent-integrations/05-hermes)
+- [插件指南](https://hermes-agent.nousresearch.com/docs/plugins/openviking)

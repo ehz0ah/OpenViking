@@ -1,123 +1,63 @@
-## Step 1: Install
+# OpenViking Service for Hermes
 
-1. Install the OpenViking provider on catalog-based Hermes builds:
+## Install and setup
 
-   ```bash
-   hermes plugins install openviking --enable
-   ```
+Run these commands in the Hermes profile you want to use:
 
-   Skip this command if your Hermes release still bundles OpenViking. When an
-   update removes the bundle from a profile already configured for OpenViking,
-   Hermes attempts to install the catalog plugin automatically.
+```bash
+hermes plugins install openviking --enable
+hermes memory setup openviking
+```
 
-2. Start the OpenViking memory setup wizard:
+Accept the dependency prompt during installation. Skip the install command
+if your Hermes release already includes OpenViking.
 
-   ```bash
-   hermes memory setup openviking
-   ```
+In the wizard:
 
-Setup first asks for **Personal Agent** or **Shared Agent**. Choose the usage
-profile that fits this Hermes instance.
+1. Choose **Personal Agent** to recall common memory and the current sender's
+   memory while keeping history settings. Choose **Shared Agent** to share
+   history within each group or thread and recall all senders' memories under
+   the same OpenViking user. Shared Agent asks for confirmation.
+2. If prompted, choose **Create new OpenViking profile**. You can also reuse
+   a saved `ovcli.conf`.
+3. Choose **OpenViking Service (VolcEngine Cloud)**.
+4. Enter your service API key.
+5. Choose where to save the connection. **Keep in Hermes only** saves it in
+   the Hermes `.env`. **Mirror to OpenViking store** saves a local
+   `ovcli.conf.<name>` and links Hermes to it. Both save credentials on this
+   computer.
+6. For a saved OpenViking profile, enter a name such as `hermes`. This is a
+   local config name. It does not create a user or change access rights.
 
-3. If local `ovcli.conf` profiles exist, the wizard asks for the configuration
-   source. Otherwise, it starts creating a new configuration:
+Then start a new Hermes session:
 
-   ```text
-   OpenViking config source
-     ↑↓ navigate  ENTER/SPACE select  ESC cancel
-    → (●) Use existing OpenViking profile - choose from detected ovcli.conf profiles
-      (○) Create new OpenViking profile - enter a new URL/API key
-   ```
+```bash
+hermes
+```
 
-   Options:
+For a local server, the external plugin also offers **Quick Local**. It reuses
+a supported Hermes language model and installs a local server and embedding model.
+See the [plugin guide](https://hermes-agent.nousresearch.com/docs/plugins/openviking)
+for requirements and known issues.
 
-   - Reuse an existing Profile: read the OpenViking URL and secret from a local `ovcli.conf`, with no need to enter them again.
-   - Create a new Profile: manually provide the OpenViking service endpoint and credentials. Use this for first-time setup or when connecting to a new instance.
+## Check status
 
-4. If you choose **Create new OpenViking profile**, select **OpenViking Service (VolcEngine Cloud)** when asked for the connection type:
+```bash
+hermes memory status
+```
 
-   ```text
-   OpenViking connection
-     ↑↓ navigate  ENTER/SPACE select  ESC cancel
-
-    → (●) OpenViking Service (VolcEngine Cloud) - use the managed OpenViking endpoint
-      (○) Custom - use a local, VPS, or self-hosted OpenViking server
-      (○) Quick Local - install local embeddings; use the configured Hermes LLM
-   ```
-
-The following steps use OpenViking Service. With the external plugin, you can
-choose **Quick Local** instead to reuse a supported Hermes LLM and install a
-private server with local embeddings. Quick Local skips steps 5–7 below. Older
-bundled copies do not offer Quick Local.
-
-5. Enter the API KEY:
-
-   ```text
-   {{OPENVIKING_API_KEY}}
-   ```
-
-6. Choose how to save the configuration. We recommend **Mirror to OpenViking store**:
-
-   ```text
-   Save OpenViking config
-     ↑↓ navigate  ENTER/SPACE select  ESC cancel
-      (○) Keep in Hermes only - write values only to Hermes .env
-    → (●) Mirror to OpenViking store - write ~/.openviking/ovcli.conf.<name> and link it
-   ```
-
-7. Fill in **OpenViking profile name**, for example `hermes`. Hermes' multi-tenant capabilities can isolate models, memories, configuration, and credentials across Profiles. We recommend configuring an independent OpenViking environment or identity for each Hermes Profile, and using an easy-to-recognize local name here. This name is local only; it does not create a new user or change account identity or permissions.
-8. When setup completes, Hermes shows:
-
-   ```text
-   OpenViking memory is ready
-     Created and linked OpenViking profile.
-     Config file: ~/.openviking/ovcli.conf.hermes
-     Start a new Hermes session to activate.
-   ```
-
-New connections use user memory without an assistant peer. Setup does not ask
-for a peer ID. To separate assistant context, set `memory.openviking.agent` in
-the active Hermes profile's `config.yaml`. Existing peer memories are not moved.
-
-## Step 2: Verify
-
-1. Check the memory plugin status:
-
-   ```bash
-   hermes memory status
-   ```
-
-2. Confirm that OpenViking is selected and configured. `available` does not
-   check server connectivity or confirm memory extraction:
-
-   ```text
-   Memory status
-   ────────────────────────────────────────
-     Built-in (MEMORY.md / USER.md):
-       Memory injection:   enabled ✓
-       User profile:       enabled ✓
-       Memory tool:        enabled ✓
-     Provider:  openviking
-
-     openviking config:
-       use_ovcli_config: True
-       ovcli_config_path: ~/.openviking/ovcli.conf.hermes
-       endpoint: https://api.vikingdb.cn-beijing.volces.com/openviking
-
-     Plugin:    installed ✓
-     Status:    available ✓
-
-   ```
+Confirm that the provider is `openviking` and its status is `available`.
+This confirms saved configuration, not server health or successful extraction.
 
 ## Troubleshoot
 
-| Problem | Fix |
-|---|---|
-| OpenViking plugin is not installed | Run `hermes plugins install openviking --enable` in the active Hermes profile |
-| Provider is not openviking | Re-run `hermes memory setup openviking` |
-| Status is not available | Check the configured endpoint and linked OpenViking config file |
+| Problem | What to do |
+|---------|------------|
+| Plugin is missing | Run `hermes plugins install openviking --enable` in this profile. |
+| Another provider is selected | Run `hermes memory setup openviking` again. |
+| Status is not available | Check the saved connection settings and any linked `ovcli.conf`. |
 
-## Reference
+## More information
 
-- Docs on Manual Settings: [Hermes](https://docs.openviking.net/en/agent-integrations/05-hermes)
-- Blog about how it works: [OpenViking memory provider](https://hermes-agent.nousresearch.com/docs/plugins/openviking)
+- [Hermes integration](https://docs.openviking.net/en/agent-integrations/05-hermes)
+- [Plugin guide](https://hermes-agent.nousresearch.com/docs/plugins/openviking)

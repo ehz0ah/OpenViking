@@ -691,19 +691,19 @@ The two are separate code bases. Where their behavior differs:
 
 | | Bundled provider (Hermes `989798c`) | External plugin (this repository) |
 |---|---|---|
-| Commits during a session | None; only at session boundaries | A background commit at 20,000 pending tokens (`commit_token_threshold`) |
+| Commits during a session | Only at session boundaries | A background commit at 20,000 pending tokens (`commit_token_threshold`) |
 | Recall digests | Not supported | Optional server digest (`recall_compress`) |
 | Mirroring Hermes's built-in memory | Additions only | Additions, replacements, and removals, tracked in a URI registry |
 | `viking_forget` | User memory files with an explicit user ID | Also accepts `viking://~/`, rejects user-ID-less layouts, and checks ownership before deleting |
-| Cron, subagent, and flush contexts | Not documented at that commit | Recall works; automatic writes and mirroring are skipped |
+| Cron, subagent, and flush contexts | Not documented at that commit | Recall works. Automatic writes and mirroring are skipped |
 
 Behavior of the pinned bundled provider:
 
 - Recall runs before every model call, through session-aware `search/search`, with `/find` as a fallback. Defaults: 6 results, score threshold 0.15, 4,000 characters, 4 seconds in total and 3 seconds per request.
-- `viking_remember` sends the fact unchanged through its own session and commits it; it returns `status: submitted`.
+- `viking_remember` sends the fact unchanged through its own session and commits it. It returns `status: submitted`.
 - Commits leave no live messages (`keep_recent_count` 0). Uploads are not durable, but pending-commit markers let a later start commit sessions from a dead run on POSIX.
 - Memories are written under `viking://user/<uid>/memories/`, or `viking://user/<uid>/peers/<peer>/memories/` when a peer is set.
-- Linking an OpenViking `ovcli.conf` profile clears the five connection variables from the Hermes `.env`. `hermes backup` includes the default or environment-selected `ovcli.conf` under `$HOME`; back up a YAML-linked file separately.
+- Linking an OpenViking `ovcli.conf` profile clears the five connection variables from the Hermes `.env`. `hermes backup` includes the default or environment-selected `ovcli.conf` under `$HOME`. Back up a YAML-linked file separately.
 
 <a id="_5-ov-cli-command-reference"></a><a id="_5-1-command-tree"></a><a id="_5-2-global-options-and-unique-mechanisms"></a><a id="_5-3-capabilities-only-the-cli-has"></a>
 

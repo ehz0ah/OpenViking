@@ -1,64 +1,63 @@
 # Hermes
 
-[Hermes Agent](https://hermes-agent.nousresearch.com/)（Nous Research）支持将
-OpenViking 用作记忆提供方。根据 Hermes 版本，该提供方从插件目录安装，或由
-Hermes 内置。
+为 [Hermes Agent](https://hermes-agent.nousresearch.com/) 配置 OpenViking 长期记忆。
 
-## 安装提供方
+## 开始使用
 
-使用目录插件的 Hermes 版本需要先运行：
+在要使用的 Hermes profile 中运行：
 
 ```bash
 hermes plugins install openviking --enable
-```
-
-如果当前 Hermes 版本仍内置 OpenViking，请跳过此命令；内置副本存在时会优先加载。
-当 Hermes 更新移除内置副本时，已配置 `memory.provider: openviking` 的 profile
-会自动尝试安装目录插件。如果迁移安装失败，请在同一 Hermes profile 中运行上述命令。
-
-## 配置并开始对话
-
-```bash
 hermes memory setup openviking
 hermes
 ```
 
-先选择 **Personal Agent** 或 **Shared Agent**，再选择连接方式：
+安装时接受依赖安装提示。如果当前 Hermes 版本仍内置 OpenViking，请跳过安装命令。
+该版本会使用内置副本，不提供 Quick Local。
 
-- **Quick Local**：复用 Hermes 已配置且受支持的 LLM。向导安装独立的 OpenViking
-  服务和本地 embedding 模型，检查 LLM 后启动服务。记忆抽取仍可使用远程 LLM。
-- **OpenViking Service**：输入服务 API Key。
-- **Custom**：输入服务 URL 和凭据；向导若发现已有 `ovcli.conf` profile，可直接复用。
+对话历史用于理解当前聊天。长期记忆保存有用的信息，供后续聊天使用。
+公共记忆是不属于某个发送者的记忆。
 
-Quick Local 需要外部插件实际生效，服务在 Hermes 退出后仍会运行。
-其他自托管服务应使用独立 Python 环境或容器；Hermes 通过 HTTP 连接。
+选择 **Personal Agent** 可召回公共记忆和当前发送者的记忆，并保留现有对话历史设置。
+选择 **Shared Agent** 可在每个群组或话题内共享对话历史，并召回同一 OpenViking 用户
+下所有发送者的记忆。Shared Agent 会要求确认。
 
-对话捕获后，OpenViking 提交并抽取记忆，供后续召回。配置不会改变已有服务端数据。
+然后选择连接方式：
 
-## 更新
+- **Quick Local** 安装本地服务和 embedding 模型，复用受支持的 Hermes LLM 抽取记忆。
+  LLM 仍可使用远程 API。
+- **OpenViking Service** 使用服务 API Key。
+- **Custom** 使用 URL 和凭据连接自己的服务，也可以复用已保存的 `ovcli.conf`。
 
-通过插件目录安装的用户可运行：
+配置后正常聊天即可。OpenViking 提交捕获的对话并完成抽取后，记忆才能被召回。
+已有服务端数据会保留。
 
-```bash
-hermes plugins update openviking
-```
+Quick Local 服务在 Hermes 退出后仍会运行。支持的模型、服务控制命令和已知本地
+embedding 问题见[插件指南](https://hermes-agent.nousresearch.com/docs/plugins/openviking)。
 
-更新后重启 Hermes 或 gateway。连接设置和服务端数据会保留。
-
-如需更新 Quick Local 服务，再次运行 `hermes memory setup openviking` 并选择
-Quick Local。向导选择最新兼容的 OpenViking 0.4 版本；正常聊天复用已安装的服务。
-
-## 验证
+## 查看状态
 
 ```bash
 hermes memory status
 ```
 
-`available` 表示 provider 已配置，不会检查服务端连通性，也不代表记忆已完成抽取。
+`available` 表示 provider 已配置，不代表服务健康，也不代表记忆抽取成功。
 
-## 参见
+## 更新
 
+```bash
+hermes plugins update openviking
+```
+
+更新后重启 Hermes 或 gateway。连接设置和数据会保留。更新 Quick Local 服务时，
+重新运行配置向导并选择 Quick Local。正常聊天使用已安装的服务，不会检查更新。
+
+Hermes 更新移除内置副本时，会为已使用 OpenViking 的 profile 尝试安装目录插件。
+如果失败，请在该 profile 中运行上面的安装命令。
+
+## 更多信息
+
+- [插件指南](https://hermes-agent.nousresearch.com/docs/plugins/openviking)
 - [集成能力参考](./16-capability-reference.md)
-- [OpenViking 插件页面](https://hermes-agent.nousresearch.com/docs/plugins/openviking) — 完整配置指南
-- [部署指南](../guides/03-deployment.md) — 搭建 OpenViking 服务
-- [鉴权](../guides/04-authentication.md) — 远程访问的 API Key 设置
+- [服务部署](../guides/03-deployment.md)
+- [API Key](../guides/04-authentication.md)
