@@ -1,5 +1,10 @@
 # 为 Hermes 配置 OpenViking Service
 
+[OpenViking Service](https://www.volcengine.com/product/openviking-service) 是
+火山引擎托管和运营的 OpenViking 云服务，无需安装服务端或配置本地模型。
+在 [OpenViking 控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing)
+开通服务，然后从**用户管理**的 **API Key** 中创建密钥。
+
 ## 安装和配置
 
 在要使用的 Hermes profile 中运行：

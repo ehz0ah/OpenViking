@@ -28,7 +28,10 @@ Then choose a connection:
 
 - **Quick Local** installs a local server and embedding model. It reuses your
   supported Hermes language model for extraction, which can use a remote API.
-- **OpenViking Service** uses your service API key.
+- **OpenViking Service (VolcEngine Cloud)** connects to VolcEngine's
+  [managed OpenViking cloud service](https://www.volcengine.com/product/openviking-service)
+  with a service API key. You do not need to install a server or configure
+  local models.
 - **Custom** connects to your own server with its URL and credentials. Setup
   can also reuse a saved `ovcli.conf`.
 

@@ -26,7 +26,9 @@ hermes
 
 - **Quick Local** 安装本地服务和 embedding 模型，复用受支持的 Hermes LLM 抽取记忆。
   LLM 仍可使用远程 API。
-- **OpenViking Service** 使用服务 API Key。
+- **OpenViking Service (VolcEngine Cloud)** 通过服务 API Key 连接火山引擎的
+  [OpenViking 托管云服务](https://www.volcengine.com/product/openviking-service)，
+  无需安装服务端或配置本地模型。
 - **Custom** 使用 URL 和凭据连接自己的服务，也可以复用已保存的 `ovcli.conf`。
 
 配置后正常聊天即可。OpenViking 提交捕获的对话并完成抽取后，记忆才能被召回。

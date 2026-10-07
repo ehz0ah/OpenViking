@@ -1,5 +1,11 @@
 # OpenViking Service for Hermes
 
+[OpenViking Service](https://www.volcengine.com/product/openviking-service) is
+OpenViking hosted and operated by VolcEngine. You do not need to install a server
+or configure local models. Activate the service and create an API key in the
+[OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing).
+Open **User Management**, then **API Key**.
+
 ## Install and setup
 
 Run these commands in the Hermes profile you want to use:
