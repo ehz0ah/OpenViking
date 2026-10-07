@@ -74,7 +74,8 @@ fixture must serve an actual completion; an unreachable LLM must fail setup.
 
 ## Migration coordination
 
-Before the catalog cutover, submit a Hermes catalog entry with:
+Hermes publishes this provider through `plugin-catalog/openviking.yaml`. The
+entry must contain:
 
 - `name: openviking`
 - `repo: https://github.com/volcengine/OpenViking`
@@ -92,9 +93,11 @@ and validate the pinned installation directory:
 hermes plugins validate /path/to/hermes-profile/plugins/openviking
 ```
 
-Publish the catalog entry and validate migration before Hermes removes its
-bundled provider. Hermes PR [#114569](https://github.com/NousResearch/hermes-agent/pull/114569)
-adds catalog recovery for configured providers that no longer resolve. The
+Hermes PR [#131267](https://github.com/NousResearch/hermes-agent/pull/131267)
+published the catalog entry. Hermes PR
+[#114569](https://github.com/NousResearch/hermes-agent/pull/114569) added catalog
+recovery for configured providers that no longer resolve. Keep the reviewed
+catalog pin and migration path valid before an in-tree provider is removed. A
 bundled provider takes precedence while it remains present.
 
 This plugin does not add a Desktop `config_schema.py`.
@@ -156,9 +159,9 @@ actual Hermes session keys.
 Provider-specific regression tests belong here and must use the shared external
 loader fixture. Generic Hermes framework tests remain in Hermes.
 
-For compatibility checks while Hermes still bundles OpenViking, also run its
-provider tests. These load the bundled copy unless explicitly routed through the
-external loader; they do not replace this directory's tests:
+For compatibility checks against a Hermes release that bundles OpenViking,
+also run its provider tests. These load the bundled copy unless explicitly
+routed through the external loader; they do not replace this directory's tests:
 
 ```bash
 HERMES_TEST_FILE_RETRIES=0 scripts/run_tests.sh \

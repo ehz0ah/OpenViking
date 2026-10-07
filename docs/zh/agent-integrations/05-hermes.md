@@ -1,6 +1,20 @@
 # Hermes
 
-[Hermes Agent](https://hermes-agent.nousresearch.com/) (Nous Research) 内置 OpenViking 记忆提供方。无需安装插件——把 Hermes 指向你的 OpenViking 服务即可，记忆存储、召回和抽取均原生支持。
+[Hermes Agent](https://hermes-agent.nousresearch.com/)（Nous Research）支持将
+OpenViking 用作记忆提供方。根据 Hermes 版本，该提供方从插件目录安装，或由
+Hermes 内置。
+
+## 安装提供方
+
+使用目录插件的 Hermes 版本需要先运行：
+
+```bash
+hermes plugins install openviking
+```
+
+如果当前 Hermes 版本仍内置 OpenViking，请跳过此命令；内置副本存在时会优先加载。
+当 Hermes 更新移除内置副本时，已配置 `memory.provider: openviking` 的 profile
+会自动尝试安装目录插件。如果迁移安装失败，请在同一 Hermes profile 中运行上述命令。
 
 ## 隔离 Python 环境
 

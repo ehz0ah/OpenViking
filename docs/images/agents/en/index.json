@@ -101,7 +101,7 @@
       "name": "Hermes Agent",
       "tags": ["Provider"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Hermes-Agent.png",
-      "summary": "Hermes includes OpenViking as a native memory provider. Run hermes memory setup openviking, keep VolcEngine Cloud, and paste the API key.",
+      "summary": "Use the Hermes catalog or bundled OpenViking memory provider, run hermes memory setup openviking, and connect to OpenViking Service or your own server.",
       "detailPath": "https://docs.openviking.net/agents/en/hermes.md"
     },
     {

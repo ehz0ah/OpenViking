@@ -1,12 +1,22 @@
 ## Step 1: Install
 
-1. Run the following command to start the OpenViking memory setup wizard:
+1. Install the OpenViking provider on catalog-based Hermes builds:
+
+   ```bash
+   hermes plugins install openviking
+   ```
+
+   Skip this command if your Hermes release still bundles OpenViking. When an
+   update removes the bundle from a profile already configured for OpenViking,
+   Hermes attempts to install the catalog plugin automatically.
+
+2. Start the OpenViking memory setup wizard:
 
    ```bash
    hermes memory setup openviking
    ```
 
-2. If local `ovcli.conf` profiles exist, the wizard asks for the configuration
+3. If local `ovcli.conf` profiles exist, the wizard asks for the configuration
    source. Otherwise, it starts creating a new configuration:
 
    ```text
@@ -21,7 +31,7 @@
    - Reuse an existing Profile: read the OpenViking URL and secret from a local `ovcli.conf`, with no need to enter them again.
    - Create a new Profile: manually provide the OpenViking service endpoint and credentials. Use this for first-time setup or when connecting to a new instance.
 
-3. If you choose **Create new OpenViking profile**, select **OpenViking Service (VolcEngine Cloud)** when asked for the connection type:
+4. If you choose **Create new OpenViking profile**, select **OpenViking Service (VolcEngine Cloud)** when asked for the connection type:
 
    ```text
    OpenViking connection
@@ -31,13 +41,13 @@
       (○) Custom - use a local, VPS, or self-hosted OpenViking server
    ```
 
-4. Enter the API KEY:
+5. Enter the API KEY:
 
    ```text
    {{OPENVIKING_API_KEY}}
    ```
 
-5. Choose how to save the configuration. We recommend **Mirror to OpenViking store**:
+6. Choose how to save the configuration. We recommend **Mirror to OpenViking store**:
 
    ```text
    Save OpenViking config
@@ -46,8 +56,8 @@
     → (●) Mirror to OpenViking store - write ~/.openviking/ovcli.conf.<name> and link it
    ```
 
-6. Fill in **OpenViking profile name**, for example `hermes`. Hermes' multi-tenant capabilities can isolate models, memories, configuration, and credentials across Profiles. We recommend configuring an independent OpenViking environment or identity for each Hermes Profile, and using an easy-to-recognize local name here. This name is local only; it does not create a new user or change account identity or permissions.
-7. When setup completes, Hermes shows:
+7. Fill in **OpenViking profile name**, for example `hermes`. Hermes' multi-tenant capabilities can isolate models, memories, configuration, and credentials across Profiles. We recommend configuring an independent OpenViking environment or identity for each Hermes Profile, and using an easy-to-recognize local name here. This name is local only; it does not create a new user or change account identity or permissions.
+8. When setup completes, Hermes shows:
 
    ```text
    OpenViking memory is ready
@@ -94,6 +104,7 @@ the active Hermes profile's `config.yaml`. Existing peer memories are not moved.
 
 | Problem | Fix |
 |---|---|
+| OpenViking plugin is not installed | Run `hermes plugins install openviking` in the active Hermes profile |
 | Provider is not openviking | Re-run `hermes memory setup openviking` |
 | Status is not available | Check the configured endpoint and linked OpenViking config file |
 

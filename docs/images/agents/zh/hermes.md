@@ -1,12 +1,21 @@
 ## 步骤1：安装
 
-1. 在终端执行如下命令，启动 OpenViking 记忆配置向导：
+1. 使用目录插件的 Hermes 版本需要先安装 OpenViking 提供方：
+
+   ```bash
+   hermes plugins install openviking
+   ```
+
+   如果当前 Hermes 版本仍内置 OpenViking，请跳过此命令。当更新移除内置副本时，
+   已配置 OpenViking 的 profile 会自动尝试安装目录插件。
+
+2. 启动 OpenViking 记忆配置向导：
 
    ```bash
    hermes memory setup openviking
    ```
 
-2. 如果本地已有 `ovcli.conf` 配置，向导会询问配置来源；否则会直接开始创建新配置：
+3. 如果本地已有 `ovcli.conf` 配置，向导会询问配置来源；否则会直接开始创建新配置：
 
    ```text
    OpenViking config source
@@ -20,7 +29,7 @@
    - 复用现有 Profile：直接读取本地已有的 `ovcli.conf` 中的 OpenViking 地址和密钥，无需重复填写。
    - 新建 Profile：需手动输入 OpenViking 服务的访问 URL 和 API 密钥，适合首次配置或连接新实例的场景。
 
-3. 若选择「Create new OpenViking profile」，将出现连接方式选择，请选择「OpenViking Service (VolcEngine Cloud)」：
+4. 若选择「Create new OpenViking profile」，将出现连接方式选择，请选择「OpenViking Service (VolcEngine Cloud)」：
 
    ```text
    OpenViking connection
@@ -30,13 +39,13 @@
       (○) Custom - use a local, VPS, or self-hosted OpenViking server
    ```
 
-4. 填入 API KEY：
+5. 填入 API KEY：
 
    ```text
    {{OPENVIKING_API_KEY}}
    ```
 
-5. 选择配置保存方式，建议选择「Mirror to OpenViking store」：
+6. 选择配置保存方式，建议选择「Mirror to OpenViking store」：
 
    ```text
    Save OpenViking config
@@ -45,8 +54,8 @@
     → (●) Mirror to OpenViking store - write ~/.openviking/ovcli.conf.<name> and link it
    ```
 
-6. 填写「OpenViking profile name」，例如 `hermes`：Hermes 的多租户能力可隔离不同 Profile 的模型、记忆、配置及凭据。建议为每个 Hermes Profile 配置独立的 OpenViking 环境或身份，并在此填写一个便于识别的本地配置名称，以区分对应的 OpenViking 配置。该名称仅用于本地标识，不会创建新用户，也不会改变账号身份或权限。
-7. 配置完成后将显示如下确认信息：
+7. 填写「OpenViking profile name」，例如 `hermes`：Hermes 的多租户能力可隔离不同 Profile 的模型、记忆、配置及凭据。建议为每个 Hermes Profile 配置独立的 OpenViking 环境或身份，并在此填写一个便于识别的本地配置名称，以区分对应的 OpenViking 配置。该名称仅用于本地标识，不会创建新用户，也不会改变账号身份或权限。
+8. 配置完成后将显示如下确认信息：
 
    ```text
    OpenViking memory is ready
@@ -92,6 +101,7 @@
 
 | 问题 | 处理 |
 |---|---|
+| OpenViking 插件未安装 | 在当前 Hermes profile 中运行 `hermes plugins install openviking` |
 | Provider 不是 openviking | 重跑 `hermes memory setup openviking` |
 | Status 不是 available | 检查 endpoint 配置和关联的 OpenViking 配置文件 |
 

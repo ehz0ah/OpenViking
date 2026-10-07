@@ -1,6 +1,22 @@
 # Hermes
 
-[Hermes Agent](https://hermes-agent.nousresearch.com/) by Nous Research has a first-class OpenViking memory provider built in. No plugin to install — just point Hermes at your OpenViking server and it handles memory storage, recall, and extraction natively.
+[Hermes Agent](https://hermes-agent.nousresearch.com/) by Nous Research supports
+OpenViking as a memory provider. Depending on the Hermes release, the provider
+is installed from the plugin catalog or bundled in Hermes.
+
+## Install the provider
+
+On a catalog-based Hermes build, run:
+
+```bash
+hermes plugins install openviking
+```
+
+Skip this command if your Hermes release still bundles OpenViking. The bundled
+copy takes precedence while it is present. When a Hermes update removes the
+bundle from a home that already uses `memory.provider: openviking`, Hermes
+attempts to install the catalog plugin automatically. If migration cannot
+install it, run the command above in the same Hermes profile.
 
 ## Keep the Python environments separate
 

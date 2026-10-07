@@ -5,13 +5,34 @@ Context database by Volcengine (ByteDance) with filesystem-style knowledge hiera
 This plugin connects Hermes to OpenViking for long-term memory and knowledge
 retrieval. The installation steps below use a reviewed OpenViking commit.
 
-For Hermes releases that still bundle OpenViking, follow the
-[Hermes integration guide](../../docs/en/agent-integrations/05-hermes.md) and run
-`hermes memory setup openviking`. No external plugin installation is needed.
+Hermes distributes the provider through its plugin catalog. Releases that still
+include an in-tree OpenViking provider do not need a separate installation and
+load their bundled copy first. Existing profiles keep the provider name,
+settings, and stored data when they move to the catalog plugin.
 
 For development and licensing details, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Install
+
+### Catalog installation
+
+Install and configure the provider in the same Hermes profile:
+
+```bash
+hermes plugins install openviking
+hermes memory setup openviking
+hermes memory status
+```
+
+Skip the install command on a Hermes release that still bundles OpenViking.
+When a Hermes update removes the bundle from a profile already configured with
+`memory.provider: openviking`, Hermes attempts to install the catalog plugin
+automatically.
+If migration reports an installation failure, run the command above in that
+profile. The provider name, connection settings, and stored OpenViking data do
+not change.
+
+### Pinned direct installation
 
 Validated with Hermes v2026.9.24. CI also checks the reviewed Hermes main
 commit pinned in the [test workflow](../../.github/workflows/hermes-plugin-tests.yml).
@@ -32,8 +53,8 @@ Hermes installs this directory as `$HERMES_HOME/plugins/openviking/`.
 In this two-step flow, Hermes resolves its `pyproject.toml` dependencies under
 Hermes's dependency constraints when you enable the plugin.
 
-If Hermes still includes the bundled OpenViking provider, that copy takes
-precedence. The external copy becomes active after the bundled copy is removed.
+A Hermes release with an in-tree OpenViking provider loads that copy first. The
+external copy becomes active after the in-tree copy is removed.
 Keep `memory.provider: openviking` and your existing configuration. No memory
 data needs to move.
 
