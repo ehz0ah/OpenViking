@@ -101,7 +101,7 @@
       "name": "Hermes Agent",
       "tags": ["Provider"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Hermes-Agent.png",
-      "summary": "使用 Hermes 目录插件或内置的 OpenViking 记忆提供方，运行 hermes memory setup openviking，再连接 OpenViking Service 或自有服务",
+      "summary": "使用 Hermes 目录插件或内置的 OpenViking 记忆提供方，运行 hermes memory setup openviking，再选择 Quick Local、OpenViking Service 或自有服务",
       "detailPath": "https://docs.openviking.net/agents/zh/hermes.md"
     },
     {

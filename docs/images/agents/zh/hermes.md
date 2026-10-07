@@ -3,7 +3,7 @@
 1. 使用目录插件的 Hermes 版本需要先安装 OpenViking 提供方：
 
    ```bash
-   hermes plugins install openviking
+   hermes plugins install openviking --enable
    ```
 
    如果当前 Hermes 版本仍内置 OpenViking，请跳过此命令。当更新移除内置副本时，
@@ -14,6 +14,9 @@
    ```bash
    hermes memory setup openviking
    ```
+
+向导会先询问 **Personal Agent** 或 **Shared Agent**，请选择适合当前 Hermes
+使用方式的选项。
 
 3. 如果本地已有 `ovcli.conf` 配置，向导会询问配置来源；否则会直接开始创建新配置：
 
@@ -37,7 +40,12 @@
 
     → (●) OpenViking Service (VolcEngine Cloud) - use the managed OpenViking endpoint
       (○) Custom - use a local, VPS, or self-hosted OpenViking server
+      (○) Quick Local - install local embeddings; use the configured Hermes LLM
    ```
+
+下列步骤以 OpenViking Service 为例。外部插件也可选择 **Quick Local**，复用
+Hermes 已配置且受支持的 LLM，并安装独立服务和本地 embedding 模型；该方式跳过
+下列第 5–7 步。旧版内置副本不提供 Quick Local。
 
 5. 填入 API KEY：
 
@@ -101,11 +109,11 @@
 
 | 问题 | 处理 |
 |---|---|
-| OpenViking 插件未安装 | 在当前 Hermes profile 中运行 `hermes plugins install openviking` |
+| OpenViking 插件未安装 | 在当前 Hermes profile 中运行 `hermes plugins install openviking --enable` |
 | Provider 不是 openviking | 重跑 `hermes memory setup openviking` |
 | Status 不是 available | 检查 endpoint 配置和关联的 OpenViking 配置文件 |
 
 ## 参考
 
 - 手动配置文档：[Hermes](https://docs.openviking.net/zh/agent-integrations/05-hermes)
-- 原理说明：[OpenViking memory provider](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking)
+- 原理说明：[OpenViking memory provider](https://hermes-agent.nousresearch.com/docs/plugins/openviking)

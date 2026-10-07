@@ -3,7 +3,7 @@
 1. Install the OpenViking provider on catalog-based Hermes builds:
 
    ```bash
-   hermes plugins install openviking
+   hermes plugins install openviking --enable
    ```
 
    Skip this command if your Hermes release still bundles OpenViking. When an
@@ -15,6 +15,9 @@
    ```bash
    hermes memory setup openviking
    ```
+
+Setup first asks for **Personal Agent** or **Shared Agent**. Choose the usage
+profile that fits this Hermes instance.
 
 3. If local `ovcli.conf` profiles exist, the wizard asks for the configuration
    source. Otherwise, it starts creating a new configuration:
@@ -39,7 +42,13 @@
 
     → (●) OpenViking Service (VolcEngine Cloud) - use the managed OpenViking endpoint
       (○) Custom - use a local, VPS, or self-hosted OpenViking server
+      (○) Quick Local - install local embeddings; use the configured Hermes LLM
    ```
+
+The following steps use OpenViking Service. With the external plugin, you can
+choose **Quick Local** instead to reuse a supported Hermes LLM and install a
+private server with local embeddings. Quick Local skips steps 5–7 below. Older
+bundled copies do not offer Quick Local.
 
 5. Enter the API KEY:
 
@@ -104,11 +113,11 @@ the active Hermes profile's `config.yaml`. Existing peer memories are not moved.
 
 | Problem | Fix |
 |---|---|
-| OpenViking plugin is not installed | Run `hermes plugins install openviking` in the active Hermes profile |
+| OpenViking plugin is not installed | Run `hermes plugins install openviking --enable` in the active Hermes profile |
 | Provider is not openviking | Re-run `hermes memory setup openviking` |
 | Status is not available | Check the configured endpoint and linked OpenViking config file |
 
 ## Reference
 
 - Docs on Manual Settings: [Hermes](https://docs.openviking.net/en/agent-integrations/05-hermes)
-- Blog about how it works: [OpenViking memory provider](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking)
+- Blog about how it works: [OpenViking memory provider](https://hermes-agent.nousresearch.com/docs/plugins/openviking)

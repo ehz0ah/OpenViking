@@ -15,6 +15,8 @@ hermes memory setup openviking
 hermes
 ```
 
+Accept the dependency prompt during installation.
+
 In setup, choose **Personal Agent** or **Shared Agent**, then choose a connection:
 
 | Connection | What you need |
