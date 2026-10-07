@@ -61,8 +61,9 @@ memory per profile. Upgrades keep old runtime directories and downloaded
 packages, so disk use can grow.
 
 Hermes backups include files under the profile home. The plugin also adds a
-linked `ovcli.conf` if it is outside that home. After restoring a backup on
-another machine, run setup again to rebuild any runtime missing from the backup.
+linked `ovcli.conf` outside the profile if it is within your user home directory.
+Back up files outside your user home separately. After restoring on another
+machine, run setup again to rebuild any runtime missing from the backup.
 
 ## Connection settings
 
