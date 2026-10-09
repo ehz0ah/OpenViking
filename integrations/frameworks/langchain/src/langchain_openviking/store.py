@@ -35,6 +35,7 @@ if TYPE_CHECKING:
         PutOp,
         SearchItem,
         SearchOp,
+        get_text_at_path,
     )
 else:
     try:
@@ -47,6 +48,7 @@ else:
             PutOp,
             SearchItem,
             SearchOp,
+            get_text_at_path,
         )
     except ImportError:  # pragma: no cover - exercised by optional import path
         _LANGGRAPH_IMPORT_ERROR = missing_dependency("langgraph", "langgraph")
@@ -559,7 +561,11 @@ def _extract_uris(value: Any) -> list[str]:
 
 def _project_value(value: dict[str, Any], index: bool | list[str] | None) -> dict[str, Any]:
     if isinstance(index, list):
-        return {field: _nested_value(value, field) for field in index}
+        projected = {field: _nested_value(value, field) for field in index}
+        for field in index:
+            if projected[field] is None:
+                projected[field] = get_text_at_path(value, field) or None
+        return projected
     return value
 
 
