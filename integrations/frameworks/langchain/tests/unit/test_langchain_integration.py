@@ -1640,6 +1640,20 @@ def test_langgraph_store_round_trip_and_semantic_search():
 
     assert store.list_namespaces(prefix=("users",)) == [("users", "ada")]
 
+    # A None value is a deletion in LangGraph's BaseStore contract.
+    store.put(("users", "ada"), "profile", None)
+    assert store.get(("users", "ada"), "profile") is None
+    assert "profile" not in {found.key for found in store.search(("users",), limit=5)}
+
+    # Deleting a missing key is idempotent and must not create a record.
+    store.put(("users", "ada"), "absent", None)
+    assert store.get(("users", "ada"), "absent") is None
+
+    store.put(("users", "ada"), "preferences", None)
+    store.put(("users", "ada"), "bad-rank", None)
+    assert store.search(("users",), limit=5) == []
+    assert store.list_namespaces(prefix=("users",)) == []
+
 
 @pytest.mark.parametrize("use_batch", [False, True])
 def test_langgraph_store_accepts_mapping_values(use_batch):
