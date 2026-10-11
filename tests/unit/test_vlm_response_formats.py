@@ -113,7 +113,7 @@ def test_text_request_drops_empty_assistant_but_preserves_tool_only_turn(vlm_typ
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])
-def test_openai_family_request_bounds_paired_tool_call_ids(provider):
+def test_openai_family_request_normalizes_paired_tool_call_ids(provider):
     vlm = OpenAIVLM({"provider": provider, "model": "test-model"})
     long_id = "vertex_" + "x" * 1000
     messages = [
@@ -123,13 +123,28 @@ def test_openai_family_request_bounds_paired_tool_call_ids(provider):
             "tool_calls": [{"id": long_id, "function": {"name": "read", "arguments": "{}"}}],
         },
         {"role": "tool", "tool_call_id": long_id, "content": "ok"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "read:0", "function": {"name": "read", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "read:0", "content": "one"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "read:0", "function": {"name": "read", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "read:0", "content": "two"},
     ]
 
     prepared = vlm._build_text_kwargs(messages=messages)["messages"]
+    call_ids = [prepared[index]["tool_calls"][0]["id"] for index in (0, 2, 4)]
+    result_ids = [prepared[index]["tool_call_id"] for index in (1, 3, 5)]
 
-    assert len(prepared[0]["tool_calls"][0]["id"]) == 40
-    assert prepared[0]["tool_calls"][0]["id"] == prepared[1]["tool_call_id"]
+    assert call_ids == result_ids
+    assert len(set(call_ids)) == 3
+    assert all(len(tool_call_id) <= 40 for tool_call_id in call_ids)
+    assert call_ids[1] == "read:0"
     assert messages[0]["tool_calls"][0]["id"] == long_id
+    assert messages[4]["tool_calls"][0]["id"] == "read:0"
 
 
 @pytest.mark.parametrize(
@@ -150,12 +165,21 @@ def test_non_openai_request_preserves_provider_native_tool_call_ids(vlm_type, co
             "tool_calls": [{"id": long_id, "function": {"name": "read", "arguments": "{}"}}],
         },
         {"role": "tool", "tool_call_id": long_id, "content": "ok"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "read:0", "function": {"name": "read", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "read:0", "content": "one"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "read:0", "function": {"name": "read", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "read:0", "content": "two"},
     ]
 
     prepared = vlm._build_text_kwargs(messages=messages)["messages"]
 
-    assert prepared[0]["tool_calls"][0]["id"] == long_id
-    assert prepared[1]["tool_call_id"] == long_id
+    assert prepared == messages
 
 
 @pytest.mark.asyncio

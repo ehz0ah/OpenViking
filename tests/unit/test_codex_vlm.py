@@ -743,7 +743,7 @@ def test_codex_translates_tool_history_into_responses_input(mock_resolve, mock_o
 
 @patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
 @patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
-def test_codex_bounds_paired_tool_call_ids(mock_resolve, mock_openai_class):
+def test_codex_normalizes_paired_tool_call_ids(mock_resolve, mock_openai_class):
     mock_resolve.return_value = {
         "api_key": "oauth-token",
         "base_url": "https://chatgpt.com/backend-api/codex",
@@ -770,12 +770,38 @@ def test_codex_bounds_paired_tool_call_ids(mock_resolve, mock_openai_class):
                 ],
             },
             {"role": "tool", "tool_call_id": long_id, "content": "ok"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "read:0",
+                        "type": "function",
+                        "function": {"name": "read", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "read:0", "content": "one"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "read:0",
+                        "type": "function",
+                        "function": {"name": "read", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "read:0", "content": "two"},
         ]
     )
 
     input_items = mock_real_client.responses.create.call_args.kwargs["input"]
-    assert len(input_items[0]["call_id"]) == 40
-    assert input_items[0]["call_id"] == input_items[1]["call_id"]
+    call_ids = [item["call_id"] for item in input_items if item["type"] == "function_call"]
+    result_ids = [item["call_id"] for item in input_items if item["type"] == "function_call_output"]
+    assert call_ids == result_ids
+    assert len(set(call_ids)) == 3
+    assert all(len(tool_call_id) <= 40 for tool_call_id in call_ids)
+    assert call_ids[1] == "read:0"
 
 
 @pytest.mark.parametrize(
