@@ -128,6 +128,35 @@ async def test_chat_keeps_reasoning_the_client_sent(running_gateway):
     assert requests[1]["messages"][1]["reasoning_content"] == "Client copy."
 
 
+@pytest.mark.parametrize("reasoning", ["Client copy.", "", None])
+async def test_chat_keeps_reasoning_alias_without_adding_canonical_carrier(
+    running_gateway, reasoning
+):
+    app, client, admin, key, _, _ = running_gateway
+    await configure_chat(client, admin, base_url=str(app.state.config.openviking_url))
+    requests = []
+    reasoning_backend(app, requests)
+    headers = {"Authorization": "Bearer " + key["key"], "X-OpenViking-Session": "alias"}
+    messages = [{"role": "user", "content": "One?"}]
+    response = await client.post(
+        "/v1/chat/completions",
+        headers=headers,
+        json={"model": "model", "messages": messages},
+    )
+    assert response.status_code == 200, response.text
+    reply = {"role": "assistant", "content": "Answer: One?", "reasoning": reasoning}
+    messages.extend([reply, {"role": "user", "content": "Two?"}])
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers=headers,
+        json={"model": "model", "messages": messages},
+    )
+
+    assert response.status_code == 200, response.text
+    assert requests[1]["messages"][1] == reply
+
+
 async def test_option_off_restores_nothing_and_keeps_the_deepseek_gate(running_gateway):
     app, client, admin, key, _, _ = running_gateway
     url = str(app.state.config.openviking_url)
