@@ -101,7 +101,7 @@ jobs:
         include:
           - os: ubuntu-24.04
             host: release
-            python: '3.13'
+            python: '3.14'
             hermes_ref: 818c13be1dc4fd28987e1e881a9408224afd4535
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -133,7 +133,12 @@ jobs:
         run: |
           uv sync --frozen --group dev --no-install-project
           PYTHON=$(uv run --no-sync python -c 'import sys; print(sys.executable)')
-          uv pip install --python "$PYTHON" PyYAML==6.0.3
+          uv export --frozen --group dev --no-emit-project --no-hashes \
+            --output-file "$RUNNER_TEMP/hermes-plugin-constraints.txt"
+          uv pip install --python "$PYTHON" \
+            --constraint "$RUNNER_TEMP/hermes-plugin-constraints.txt" \
+            --requirement "$GITHUB_WORKSPACE/examples/hermes-plugin/pyproject.toml" \
+            PyYAML==6.0.3
       - name: Check process ownership and installer failures
         run: |
           uv run --no-sync python -m pytest \

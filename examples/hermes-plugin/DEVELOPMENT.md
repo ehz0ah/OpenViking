@@ -143,7 +143,7 @@ The `Hermes Plugin Tests` workflow runs this directory's complete external-provi
 suite on plugin changes, pushes to `main`/`develop`, and manual dispatch.
 It uses Python 3.14 and a reviewed Hermes commit, with test retries disabled.
 The release-host job runs the complete provider suite on Hermes v0.21.6
-with Python 3.13. Legacy autostart uses Hermes's profile environment helper and
+with Python 3.14, as required by the release lockfile. Legacy autostart uses Hermes's profile environment helper and
 credential scrubber on both hosts. Unrelated process and profile secrets are
 removed; missing helpers or secret-scope errors prevent spawning.
 When updating the host SHA in `.github/workflows/hermes-plugin-tests.yml`, check

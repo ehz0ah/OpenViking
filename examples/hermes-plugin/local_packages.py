@@ -71,7 +71,13 @@ def install_requirements(*, allow_source_build=False):
         ]
     # The PM resolver otherwise chooses a LiteLLM release that excludes Python
     # 3.14. This constraint belongs only to OpenViking's private environment.
-    return [*requirements, 'litellm==1.83.7; python_version >= "3.14"']
+    # The split SDK distribution drops the Ark runtime imported by released
+    # OpenViking servers, including non-Ark deployments (OpenViking #5906).
+    return [
+        *requirements,
+        'litellm==1.83.7; python_version >= "3.14"',
+        "volcengine-python-sdk[ark]>=5.0.3,<5.0.51",
+    ]
 
 
 def resolve_server_requirement(*, allow_source_build=False):

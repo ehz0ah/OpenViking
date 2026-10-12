@@ -88,8 +88,8 @@ Hermes model or API key. Your data and downloaded model are kept.
 calls overlap, such as during indexing and recall. This affects Quick Local
 and Custom servers using that local backend. It does not affect connections
 using remote embedding APIs. The [fix](https://github.com/volcengine/OpenViking/pull/5548)
-is merged and is expected in OpenViking 0.4.24. After that release, run Quick
-Local setup again to upgrade.
+is included in OpenViking 0.5.0. Quick Local currently uses the 0.4 series.
+To use the fixed backend, choose Custom with an OpenViking 0.5.0 server.
 
 The server keeps running after Hermes exits. These commands are optional:
 

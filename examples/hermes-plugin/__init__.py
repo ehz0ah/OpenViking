@@ -1727,7 +1727,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         return (
             "# OpenViking Knowledge Base\n"
             "OpenViking provides durable indexed memory and knowledge. Automatic recall and capture are active.\n"
-            "When OpenViking MCP tools are available, use their search and read tools for remembered people, "
+            "When OpenViking MCP tools are available, use their find and read tools for remembered people, "
             "preferences, projects, events and resources before asking the user to repeat context. "
             "Use the available tool schemas for names, arguments and write operations. "
             "Prefer one or two focused searches, then read the strongest result URIs. "

@@ -48,6 +48,20 @@ def test_wrong_native_hash_is_rejected_before_install(external_provider, tmp_pat
     assert not list(cache.rglob("*.whl"))
 
 
+def test_server_requirements_keep_the_ark_runtime(external_provider):
+    from packaging.requirements import Requirement
+
+    _h, _p, module, _s = external_provider("server-sdk")
+    packages = importlib.import_module(module.__name__ + ".local_packages")
+    requirements = packages.install_requirements(allow_source_build=True)
+    sdk = next(
+        Requirement(item) for item in requirements if item.startswith("volcengine-python-sdk")
+    )
+    assert "ark" in sdk.extras
+    assert "5.0.50" in sdk.specifier
+    assert "5.0.51.post1" not in sdk.specifier
+
+
 def test_verified_native_cache_is_rechecked_and_reused(external_provider, tmp_path, wheel_source):
     from packaging.requirements import Requirement
 
