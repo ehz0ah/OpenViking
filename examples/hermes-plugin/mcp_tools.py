@@ -116,9 +116,9 @@ def configure(config: dict, hermes_home: str) -> None:
             k: v for k, v in entry["headers"].items() if k.lower() not in _CONNECTION_HEADERS
         }
     entry.setdefault("enabled", True)
-    # Match Hermes's default and preserve an explicitly selected trust policy.
-    # Setup explains that full trust permits writes and deletes without approval.
-    entry.setdefault("trust", "full")
+    # A pre-existing entry without a trust field uses Hermes's implicit full
+    # trust. Preserve that policy; only a new connection defaults to untrusted.
+    entry.setdefault("trust", "full" if isinstance(existing, dict) else "untrusted")
     # Cold Quick Local starts happen in the memory provider, independently of
     # this child. Leave enough time for discovery to wait for that startup.
     entry.setdefault("connect_timeout", 60)

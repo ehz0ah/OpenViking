@@ -161,16 +161,30 @@ plugin's changes become available when that copy is removed.
 
 ## Tools
 
-Hermes calls these tools when needed. You do not need to run them yourself.
+Setup connects Hermes to the OpenViking server's standard MCP tools. All server
+tools are available unless you have configured a filter. Hermes calls them when
+needed. You do not need to run them yourself.
 
 | Tool | What it does |
 |------|--------------|
-| `viking_search` | Search memories and knowledge. |
-| `viking_read` | Read content at a `viking://` address. |
-| `viking_browse` | List files and directories. |
-| `viking_remember` | Submit a fact for memory extraction. |
-| `viking_forget` | Delete one exact memory file. |
-| `viking_add_resource` | Add a URL or document to the knowledge base. |
+| `find` | Search memories and knowledge without changing data. |
+| `read` | Read content at a `viking://` address. |
+| `list`, `tree` | Browse files and directories. |
+| `remember` | Extract memories from supplied messages. |
+| `write`, `edit` | Create or change files. |
+| `forget` | Delete a file or directory, including recursive deletion. |
+| `add_resource`, `add_skill` | Import knowledge or skills. |
+
+New setups use `trust: untrusted`. Read-only tools such as `find` and `read`
+run without approval. Hermes asks before other tools, including `search`,
+`write` and `forget`. Unattended runs cannot approve those calls. Automatic
+recall, capture and commits continue without these prompts.
+Existing trust settings and tool filters are kept. See [MCP tools](CONFIGURATION.md#mcp-tools)
+for configuration and recovery.
+
+When upgrading from the old `viking_*` tools, run `hermes memory setup openviking`
+once and restart Hermes or the gateway. For local files, follow the upload
+instructions returned by `add_resource` or `add_skill`.
 
 ## Remove
 
@@ -187,11 +201,12 @@ in `$HERMES_HOME/openviking/`.
 
 ## Requirements
 
+- Hermes v0.21.6 or newer.
 - Python 3.11 or newer in the Hermes environment.
 - OpenViking Service, Quick Local or a reachable OpenViking server.
-- OpenViking 0.2.14 or newer for Custom connections.
+- OpenViking 0.4.1 or newer with its `/mcp` endpoint for Custom connections.
 
-Tested with Hermes v2026.9.24 and the Hermes main commit used in
+Tested with Hermes v0.21.6 at the release commit used in
 [CI](../../.github/workflows/hermes-plugin-tests.yml).
 
 ## Config

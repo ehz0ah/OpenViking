@@ -172,14 +172,22 @@ def test_setup_preserves_policy_and_never_copies_keys(external_provider, enabled
     assert new["env"]["SSL_CERT_FILE"] == "/explicit/ca.pem"
 
 
-def test_setup_exposes_all_tools_with_hermes_default_trust(external_provider):
+def test_new_setup_exposes_all_tools_with_untrusted_policy(external_provider):
     home, _, module, _ = external_provider("mcp-default-policy")
     mcp = importlib.import_module(module.__name__ + ".mcp_tools")
     config = {}
     mcp.configure(config, str(home))
     entry = config["mcp_servers"]["openviking"]
-    assert entry["trust"] == "full"
+    assert entry["trust"] == "untrusted"
     assert "tools" not in entry
+
+
+def test_setup_preserves_existing_implicit_full_trust(external_provider):
+    home, _, module, _ = external_provider("mcp-existing-policy")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    config = {"mcp_servers": {"openviking": {"url": "https://old.example/mcp"}}}
+    mcp.configure(config, str(home))
+    assert config["mcp_servers"]["openviking"]["trust"] == "full"
 
 
 def test_transport_environment_survives_hermes_stdio_filter(external_provider, monkeypatch):
@@ -513,7 +521,9 @@ def test_tls_failure_is_actionable_and_not_retried(external_provider, monkeypatc
     assert "certificate paths" in mcp._error_hint(FileNotFoundError("secret path"))
 
 
-def test_migration_notice_is_visible_once_without_writing_to_stdout(external_provider, caplog, capsys):
+def test_migration_notice_is_visible_once_without_writing_to_stdout(
+    external_provider, caplog, capsys
+):
     home, provider, _, _ = external_provider("mcp-migration-notice")
     provider._hermes_home = str(home)
     callbacks = []

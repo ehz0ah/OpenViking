@@ -564,7 +564,7 @@ def run_setup(hermes_home: str, config: dict) -> None:
                 "and forget can permanently delete entire directories."
             )
         else:
-            _say("Hermes will use its approval prompts for MCP tool calls.")
+            _say("Read-only OpenViking tools run without approval. Other tools need approval.")
         if usage_profile == _SHARED_PROFILE:
             _say("Restart the Hermes gateway to apply the shared session settings.")
         else:

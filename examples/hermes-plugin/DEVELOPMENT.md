@@ -81,34 +81,19 @@ It does not manage the server process, rewrite tool schemas or retry writes.
 
 ### MCP host compatibility
 
-Fresh setup uses Hermes's `trust: full` default, with a notice that all exposed
-tools can run without per-call approval, including recursive deletion. Existing
-trust settings and tool filters are preserved. This policy permits interactive
-and unattended use without depending on the host's approval UI.
+New MCP connections default to `trust: untrusted`. Hermes v0.21.6 includes
+both the SDK 2 read-only annotation fix (Hermes #133532) and the CLI approval
+callback fix. The plugin manifest requires `>=0.21.6`, and CI uses the release
+commit `818c13be1dc4fd28987e1e881a9408224afd4535`.
 
-Opt-in `trust: untrusted` needs Hermes to recognize MCP SDK 2's `read_only_hint`
-Python attribute. The tested CI pin `5bba024d8ddd388f56f354c1f789be825e3d8a3c` and
-v2026.9.24 read only `readOnlyHint`. Every tool is therefore classified as
-write-capable. [Hermes #133532](https://github.com/NousResearch/hermes-agent/pull/133532)
-merged the fix from #111270 in `4b6884aaa7a50d5ba0cbbe8edda23a283ca2cfdf`.
-The annotation reader was checked against real MCP SDK 2 objects on Hermes
-`88c60858468d7adee27a752242c7c507fa4129d0`: read-only hints pass; false, missing
-and malformed hints remain write-capable. This check does not validate the
-interactive approval flow. Keep tool annotations unchanged in this plugin.
+Existing trust settings and filters are preserved. An existing entry without
+`trust` retains Hermes's implicit `full` policy. Do not change server annotations
+in the adapter. `search`, `remember`, `write` and `forget` require approval under
+`untrusted`; unattended runs cannot approve them.
 
-Classic CLI consent routing is fixed on Hermes main by
-`ef1faa4cf810423513a8a5b6ff81afbcf215c363`; the older test hosts lack that fix.
-Unattended workers intentionally decline consent. `trust: full` bypasses the
-approval gate but does not repair annotation handling.
-
-Keep `full` as the default while v2026.9.24 remains supported. Before changing
-the default for new setups, update the supported baseline and CI pin to a
-released Hermes build with both fixes, then test read-only calls without
-approval, interactive write approval and denial, and unattended write refusal.
-`search`, `remember`, `write` and `forget` still require approval under
-`untrusted`; `-q` and cron cannot approve them. Preserve existing trust choices
-when changing the default.
-Green plugin tests alone do not establish that the host's approval flow works.
+Before release, verify read-only calls without approval, interactive approval
+and denial with backend checks, and unattended refusal through the installed
+external plugin. Green unit tests alone do not establish the approval UI works.
 
 ## Migration coordination
 
@@ -157,7 +142,7 @@ recovery do not resolve or upgrade packages.
 The `Hermes Plugin Tests` workflow runs this directory's complete external-provider
 suite on plugin changes, pushes to `main`/`develop`, and manual dispatch.
 It uses Python 3.14 and a reviewed Hermes commit, with test retries disabled.
-The release-host job runs the complete provider suite on Hermes v2026.9.24
+The release-host job runs the complete provider suite on Hermes v0.21.6
 with Python 3.13. Legacy autostart uses Hermes's profile environment helper and
 credential scrubber on both hosts. Unrelated process and profile secrets are
 removed; missing helpers or secret-scope errors prevent spawning.
