@@ -660,7 +660,7 @@ Agent 插件每轮注入上下文时，过去需要按类型逐个检索、再�
 
 #### 2. 接口和参数说明
 
-**L0 检索域**：`query`、`image_url`、`context_type`、`limit`、`score_threshold`、`filter`、`tags`、`since`/`until` 以及可选的 `events_time_decay_protection` 与 list 模式一致。`limit` 只约束 quota-free 检索；一旦 `purpose` 或显式 `quotas` 启用分桶检索，各分类配额就是唯一候选上限。`target_uri` 在 context 模式下暂不支持（返回 400）；`level` 被忽略，档位由 `detail` 决定。
+**L0 检索域**：`query`、`image_url`、`context_type`、`limit`、`score_threshold`、`filter`、`tags`、`since`/`until` 以及可选的 `events_time_decay_protection` 与 list 模式一致。`limit` 只约束 quota-free 检索；一旦 `purpose` 或显式 `quotas` 启用分桶检索，各分类配额之和就是候选上限。`target_uri` 在 context 模式下暂不支持（返回 400）；`level` 被忽略，档位由 `detail` 决定。
 
 **L1 查询理解**
 
@@ -675,8 +675,8 @@ Agent 插件每轮注入上下文时，过去需要按类型逐个检索、再�
 |------|------|--------|------|
 | `limit` | int | 10 | 仅作为 quota-free 检索的候选条目上限；`purpose` 或 `quotas` 启用分桶后被忽略 |
 | `max_tokens` | int | 1600 | 唯一的预算参数，采用感知 CJK 的启发式估算（codepoint ≥ 0x3000 记 1.5 token/字，其余按 chars/4） |
-| `quotas` | object | None | 各桶绝对条数上限；键取 `events`/`entities`/`preferences`/`experiences`/`resources`/`skills`。显式传入后忽略 `limit` |
-| `purpose` | `chat` \| `coding` | None | 按下表的绝对分类配额启用六域分桶采样；仅在未显式传 `quotas` 时生效 |
+| `quotas` | object | None | 各桶首轮条数上限，总和即候选上限；某个桶用不满的名额会让给其他桶剩余的最佳命中，`0` 表示关闭该桶。键取 `events`/`entities`/`preferences`/`experiences`/`resources`/`skills`。显式传入后忽略 `limit` |
+| `purpose` | `chat` \| `coding` | None | 按下表的分类配额启用六域分桶采样；仅在未显式传 `quotas` 时生效 |
 | `detail` | `abstract` \| `overview` \| `full` \| object | None | 为每条结果请求同一个起始档和最高档；请求档不可用或装不进预算时仍逐档退档而不截断。省略时按类别取默认档（见下）。也可传按类别的对象，如 `{"events":"overview","preferences":"abstract"}`，未列出的类别仍取默认档。`"auto"` 是已废弃的写法，等价于省略 |
 | `dedup_turns` | int | 0 | 跨轮冷却轮数，需要 `session_id`；账本存在 `{session_uri}/.recall_log.json` |
 | `exclude_uris` | string[] | [] | 无状态去重兜底，最多 200 条，与 `dedup_turns` 取并集 |
@@ -692,8 +692,8 @@ Agent 插件每轮注入上下文时，过去需要按类型逐个检索、再�
 
 **档位规则**
 
-- **Purpose 预设**：`chat` 使用 `events:3, entities:3, preferences:1, experiences:1, resources:1, skills:1`；`coding` 使用 `events:1, entities:2, preferences:1, experiences:1, resources:3, skills:2`。这些值是每个分类的绝对上限，不是权重。各桶结果汇总后仍会去重并全局排序，但不会再被第二个全局 `limit` 截断
-- **按类别的默认档**：省略 `detail` 时，各类别落在下表的档位；文件条目中只有 `events` 的默认档需要回读正文；目录命中会读取 `.overview.md`
+- **Purpose 预设**：`chat` 使用 `events:3, entities:3, preferences:1, experiences:1, resources:1, skills:1`；`coding` 使用 `events:1, entities:2, preferences:1, experiences:1, resources:3, skills:2`。每个桶先按自己的配额取条目；某个桶命中不足时，空出的名额让给其他桶剩余的最佳命中，总数（两个预设都是 10）不会超出。各桶结果汇总后仍会去重并全局排序，但不会再被第二个全局 `limit` 截断
+- **按类别的默认档**：省略 `detail` 时，各类别落在下表的档位；文件条目中只有 `events` 的默认档需要回读正文；目录命中会读取 `.overview.md`。预置的作用域目录（`viking://resources`、`viking://agent` 及其预置子目录、用户根目录及其一级目录）只用于导航，不会作为条目返回，即使它们的 `.overview.md` 已按内容重新生成也一样
 
   | 类别 | 默认档 | 剩余预算可加深到 | 原因 |
   |------|--------|------------------|------|
@@ -844,7 +844,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | case_insensitive | bool | 否 | False | 忽略大小写 |
 | node_limit | int | 否 | 256 | 最大返回节点数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 | exclude_uri | str | 否 | None | 要排除在搜索之外的 URI 前缀 |
-| level_limit | int | 否 | Python SDK: 5；HTTP API / CLI / Go SDK: 10 | 最大目录遍历深度。Go SDK 当前使用 HTTP API 默认值。 |
+| level_limit | int | 否 | 10 | 最大目录遍历深度。HTTP SDK 未指定时使用服务端默认值。 |
 | tags | string[] | 否 | 未设置 | 仅搜索同时匹配全部 `k=v` 检索标签的文件 |
 | include_tags | bool | 否 | `false` | 不过滤时也在每条命中中返回检索标签 |
 | before_context | int | 否 | 0 | 每条匹配行之前返回的上下文行数；仅 HTTP API 和 CLI 支持 |

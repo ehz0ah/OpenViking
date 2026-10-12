@@ -1,9 +1,8 @@
 name: openviking
 version: 2.2.0
-description: "OpenViking context database — session-managed memory with automatic extraction, tiered retrieval, and filesystem-style knowledge browsing."
+description: "Long-term memory for Hermes with automatic capture, recall and tools to search and manage knowledge."
 pip_dependencies:
   - httpx
   - mcp
 requires_env: []
-hooks:
-  - on_session_end
+hooks: []
