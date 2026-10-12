@@ -83,6 +83,11 @@ def _tls_error(exc):
 def _error_hint(exc):
     import httpx2
 
+    if any(
+        "ROOT API keys cannot access tenant-scoped data APIs" in str(error)
+        for error in _error_chain(exc)
+    ):
+        return "Use a user or admin OpenViking API key for memory tools. Root keys manage accounts."
     if _tls_error(exc):
         return "TLS verification failed. Check SSL_CERT_FILE, SSL_CERT_DIR or ssl_verify."
     if any(isinstance(error, FileNotFoundError) for error in _error_chain(exc)):

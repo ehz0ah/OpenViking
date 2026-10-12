@@ -122,6 +122,8 @@ openviking-server
 
 Then run `hermes memory setup openviking` and choose Custom. For setup to
 start a stopped local server, `openviking-server` must be on `PATH`.
+On OpenViking 0.5.0 in API key mode, use a user or admin API key for memory.
+Root keys are for administration.
 
 ## Check status
 

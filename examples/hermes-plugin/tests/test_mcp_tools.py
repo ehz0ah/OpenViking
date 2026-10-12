@@ -521,6 +521,17 @@ def test_tls_failure_is_actionable_and_not_retried(external_provider, monkeypatc
     assert "certificate paths" in mcp._error_hint(FileNotFoundError("secret path"))
 
 
+def test_root_key_rejection_has_a_safe_credential_hint(external_provider):
+    _, _, module, _ = external_provider("mcp-root-key-error")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    rejected = RuntimeError(
+        "ROOT API keys cannot access tenant-scoped data APIs: private account details"
+    )
+    hint = mcp._error_hint(ExceptionGroup("transport failed", [rejected]))
+    assert "user or admin OpenViking API key" in hint
+    assert "private account details" not in hint
+
+
 def test_migration_notice_is_visible_once_without_writing_to_stdout(
     external_provider, caplog, capsys
 ):

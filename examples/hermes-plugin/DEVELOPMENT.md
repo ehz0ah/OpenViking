@@ -127,9 +127,9 @@ copy first.
 
 This plugin does not add a Desktop `config_schema.py`.
 The wizard uses private helpers from `hermes_cli.memory_setup`; changes to
-those helpers require compatibility checks. The plugin uses HTTP. Quick Local installs the server in a separate
-profile runtime through Hermes PM, or the earlier Hermes uv installer on the
-tested release baseline. It does not add server dependencies to Hermes.
+those helpers require compatibility checks. The plugin uses HTTP. Quick Local
+installs the server in a separate profile runtime through Hermes PM. It does not
+add server dependencies to Hermes.
 Explicit Quick Local setup resolves the latest stable, Python/platform-compatible
 OpenViking 0.4 release from PyPI and verifies the wheel against PyPI's download
 hash. The native embedding package remains pinned and hash-verified. The resolved
@@ -142,9 +142,10 @@ recovery do not resolve or upgrade packages.
 The `Hermes Plugin Tests` workflow runs this directory's complete external-provider
 suite on plugin changes, pushes to `main`/`develop`, and manual dispatch.
 It uses Python 3.14 and a reviewed Hermes commit, with test retries disabled.
-The release-host job runs the complete provider suite on Hermes v0.21.6
-with Python 3.14, as required by the release lockfile. Legacy autostart uses Hermes's profile environment helper and
-credential scrubber on both hosts. Unrelated process and profile secrets are
+The reviewed host is Hermes v0.21.6, with Python 3.14 as required by its
+release lockfile. Platform jobs use the same host for service checks.
+Legacy autostart uses Hermes's profile environment helper and credential
+scrubber. Unrelated process and profile secrets are
 removed; missing helpers or secret-scope errors prevent spawning.
 When updating the host SHA in `.github/workflows/hermes-plugin-tests.yml`, check
 the host dependency pins and run the suite before submitting the change.
