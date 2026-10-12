@@ -1056,6 +1056,8 @@ class VikingClient:
             return parts
 
         for message in messages:
+            if message.get("openviking_capture") is False:
+                continue
             role = str(message.get("role") or "").strip().lower()
             if role not in {"user", "assistant", "system", "tool"}:
                 continue
