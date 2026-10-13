@@ -23,7 +23,26 @@ def test_server_distribution_does_not_depend_on_standalone_integration():
 
 
 def test_server_source_excludes_removed_framework_namespace():
-    assert not (PROJECT_ROOT / "openviking" / "integrations").exists()
+    source_files = sorted((PROJECT_ROOT / "openviking" / "integrations").rglob("*.py"))
+    assert not source_files, f"Remove legacy framework sources: {source_files}"
+
+
+def test_framework_sources_and_tests_use_package_locations():
+    retired_roots = [
+        PROJECT_ROOT / "tests" / "integration" / "langchain_langgraph",
+        PROJECT_ROOT / "examples" / "agent-framework",
+        *(PROJECT_ROOT / "examples").glob("langchain*"),
+    ]
+    stale_files = [path for root in retired_roots for path in root.rglob("*.py")]
+    stale_files.extend(
+        path
+        for path in (PROJECT_ROOT / "tests" / "unit").glob("test_langchain_*.py")
+        if path.name != "test_langchain_package_boundary.py"
+    )
+    stale_paths = sorted(str(path.relative_to(PROJECT_ROOT)) for path in stale_files)
+    assert not stale_paths, (
+        "Move framework sources and tests into integrations/frameworks/: " + ", ".join(stale_paths)
+    )
 
 
 def test_standalone_package_has_no_server_imports_at_module_scope():

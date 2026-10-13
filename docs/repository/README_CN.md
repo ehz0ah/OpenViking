@@ -311,6 +311,8 @@ Codex 首次启动会停在 `Hooks need review`，选 `Trust all and continue`�
 
 详细接入方式请参考 [Integrations](https://openviking.ai/integrations)。
 
+框架应用请参考 [LangChain/LangGraph 和 Microsoft Agent Framework 集成包](../../integrations/frameworks/README.md)，其中也介绍了如何添加其他框架适配器。
+
 ## 桌面客户端（Beta）
 
 桌面客户端是面向 macOS 和 Windows x64 的控制台（Beta），用于配置支持的本地 Agent 接入、查看会话中的召回与捕获事件，并将本地记忆和技能同步到 OpenViking。

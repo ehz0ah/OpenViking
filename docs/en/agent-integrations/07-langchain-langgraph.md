@@ -11,9 +11,11 @@ pip install langchain-openviking                 # LangChain adapters
 pip install "langchain-openviking[langgraph]"    # LangGraph middleware support
 ```
 
-The integration is released independently from the OpenViking server. The legacy
-`openviking.integrations.langchain` namespace has been removed; install the
-standalone package and import from `langchain_openviking` instead.
+The integration is released independently from the OpenViking server. Starting
+with the next server release after v0.5.0, the legacy
+`openviking.integrations.langchain` namespace is removed without a compatibility
+shim. v0.5.0 still provides it. Install the standalone package and import from
+`langchain_openviking` instead; see the [Unreleased migration notes](../about/02-changelog.md#unreleased).
 
 ## Connection
 

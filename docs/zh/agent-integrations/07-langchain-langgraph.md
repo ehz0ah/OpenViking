@@ -11,8 +11,10 @@ pip install langchain-openviking                 # LangChain 适配器
 pip install "langchain-openviking[langgraph]"    # LangGraph middleware
 ```
 
-该集成独立于 OpenViking server 发布。旧的 `openviking.integrations.langchain`
-命名空间已移除；请安装独立包，并改用 `langchain_openviking` 导入。
+该集成独立于 OpenViking server 发布。从 v0.5.0 之后的下一个服务端版本开始，
+旧的 `openviking.integrations.langchain` 命名空间将移除，不提供兼容转发模块；
+v0.5.0 仍保留该路径。请安装独立包，并改用 `langchain_openviking` 导入，
+详见[未发布版本的迁移说明](../about/02-changelog.md#未发布)。
 
 ## 连接
 

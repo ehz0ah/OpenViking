@@ -318,6 +318,8 @@ Codex は初回起動時に `Hooks need review` で止まるので、`Trust all 
 
 設定方法と統合の詳細は [Integrations](https://openviking.ai/integrations) を参照してください。
 
+フレームワークを使うアプリケーション向けには、[LangChain/LangGraph と Microsoft Agent Framework の統合パッケージ](../../integrations/frameworks/README.md)を参照してください。他のフレームワーク用アダプターを追加する手順も説明しています。
+
 ## デスクトップアプリ（Beta）
 
 デスクトップアプリは macOS と Windows x64 向けのコンソール（Beta）です。対応するローカルエージェントとの連携を設定し、セッションのリコールやキャプチャを確認して、ローカルのメモリとスキルを OpenViking に同期できます。
