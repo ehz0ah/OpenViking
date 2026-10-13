@@ -7,6 +7,7 @@ from copy import deepcopy
 import pytest
 from agent_framework import (
     Agent,
+    AgentLoopMiddleware,
     AgentSession,
     BaseChatClient,
     ChatMiddlewareLayer,
@@ -260,3 +261,101 @@ async def test_shared_provider_keeps_session_state_separate():
     assert len(client.rows) == 4
     assert not first.state[provider.source_id]["pending_messages"]
     assert not second.state[provider.source_id]["pending_messages"]
+
+
+async def loop_capture(stream, *, fresh_context=False, return_final_only=False, tools=False):
+    def lookup_label():
+        """Return the current label."""
+        return "TOOL_VALUE"
+
+    responses = [
+        Message("assistant", ["First draft"], message_id="draft"),
+        Message("assistant", ["Final answer"], message_id="final"),
+    ]
+    if tools:
+        responses.insert(
+            0,
+            Message(
+                "assistant",
+                [Content("function_call", call_id="loop-call", name="lookup_label", arguments={})],
+                message_id="tool-call",
+            ),
+        )
+    client, provider, model, agent, session = setup(responses)
+    middleware = [
+        AgentLoopMiddleware(
+            lambda *, iteration, **kwargs: iteration < 2,
+            next_message=lambda **kwargs: "Please refine the draft",
+            fresh_context=fresh_context,
+            return_final_only=return_final_only,
+        )
+    ]
+    # Per-call middleware exercises the public runtime override as well.
+    kwargs = {"middleware": middleware, "tools": [lookup_label] if tools else []}
+    if stream:
+        async with agent.run("Question", session=session, stream=True, **kwargs) as response:
+            async for _ in response:
+                pass
+    else:
+        await agent.run("Question", session=session, **kwargs)
+    return client, provider, model, session
+
+
+@pytest.mark.parametrize("tools", [False, True])
+@pytest.mark.parametrize("return_final_only", [False, True])
+async def test_streamed_agent_loop_preserves_the_same_transcript(tools, return_final_only):
+    ordinary, _, _, _ = await loop_capture(False, tools=tools, return_final_only=return_final_only)
+    streamed, _, _, _ = await loop_capture(True, tools=tools, return_final_only=return_final_only)
+
+    def transcript(client):
+        return [{"role": row["role"], "parts": row["parts"]} for row in client.rows]
+
+    assert transcript(streamed) == transcript(ordinary)
+    assert "First draft" in json.dumps(streamed.rows)
+    assert "Please refine the draft" in json.dumps(streamed.rows)
+    assert "Final answer" in json.dumps(streamed.rows)
+    assert "Preferred format" not in json.dumps(streamed.rows)
+    assert len(set(streamed.sessions)) == 1
+    assert len({row["source_message_ids"][0] for row in streamed.rows}) == len(streamed.rows)
+    if tools:
+        parts = [p for row in streamed.rows for p in row["parts"] if p["type"] == "tool"]
+        assert [p["tool_status"] for p in parts] == ["pending", "completed"]
+        assert {p["tool_id"] for p in parts} == {"loop-call"}
+        assert parts[1]["tool_output"] == "TOOL_VALUE"
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_loop_cannot_silently_reset_capture_progress(stream):
+    with pytest.raises(RuntimeError, match="state.*reset.*fresh_context=True"):
+        await loop_capture(stream, fresh_context=True)
+
+
+async def test_interrupted_streamed_loop_keeps_only_completed_iterations():
+    client, _, _, agent, session = setup(
+        [
+            Message("assistant", ["First draft"], message_id="draft"),
+            Message("assistant", ["Final answer"], message_id="final"),
+        ]
+    )
+    loop = AgentLoopMiddleware(lambda *, iteration, **kwargs: iteration < 2)
+    async with agent.run("Question", session=session, middleware=[loop], stream=True) as response:
+        async for update in response:
+            if "Final answer" in update.text:
+                break
+    assert [p["text"] for row in client.rows for p in row["parts"]] == ["Question", "First draft"]
+    assert not session.state["openviking"]["pending_messages"]
+
+
+async def test_state_rollback_blocks_flush_and_commit_but_equal_state_restoration_is_safe():
+    client, provider, _, agent, session = setup()
+    await agent.run("Question", session=session)
+    saved = AgentSession.from_dict(json.loads(json.dumps(session.to_dict()))).state
+    session.state = {}
+    with pytest.raises(RuntimeError, match="state was reset"):
+        await provider.flush(session)
+    with pytest.raises(RuntimeError, match="state was reset"):
+        await provider.commit(session)
+    assert not client.commits
+    session.state = saved
+    await agent.run("Next", session=session)
+    assert len(client.rows) == 4

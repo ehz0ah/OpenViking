@@ -9,6 +9,7 @@ import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, Literal
 from uuid import uuid4
+from weakref import WeakKeyDictionary
 
 from agent_framework import (
     AgentSession,
@@ -57,7 +58,9 @@ class OpenVikingContextProvider(ContextProvider):
     The caller initializes and closes the client and persists MAF session state.
     """
 
-    after_run_once_per_turn = True
+    # Capture each completed agent run: loop-level streamed responses only contain
+    # the final iteration in MAF, while per-run responses retain all tool evidence.
+    after_run_once_per_turn = False
 
     def __init__(
         self,
@@ -78,9 +81,20 @@ class OpenVikingContextProvider(ContextProvider):
         self.limit = limit
         self.token_budget = token_budget
         self._write_lock = asyncio.Lock()
+        self._session_states: WeakKeyDictionary[AgentSession, dict[str, Any]] = WeakKeyDictionary()
 
     def _state(self, session: AgentSession) -> dict[str, Any]:
-        return session.state.setdefault(self.source_id, {})
+        state = session.state.setdefault(self.source_id, {})
+        # A loop's fresh_context mode rolls provider state back between iterations.
+        # External appends cannot be rolled back with it; fail before another write.
+        previous = self._session_states.get(session)
+        if previous is not None and previous != state:
+            raise RuntimeError(
+                "OpenViking provider state was reset during this session. "
+                "State-resetting middleware such as fresh_context=True is unsupported."
+            )
+        self._session_states[session] = state
+        return state
 
     async def _ensure_session(self, session: AgentSession) -> str:
         state = self._state(session)
@@ -100,6 +114,7 @@ class OpenVikingContextProvider(ContextProvider):
         state: dict[str, Any],
     ) -> None:
         """Retrieve context before inference; never replay unconfirmed writes implicitly."""
+        self._state(session)
         if state.get("pending_messages"):
             raise RuntimeError(
                 "OpenViking capture is unconfirmed. Inspect server records and pending_messages "

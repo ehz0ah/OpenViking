@@ -1,7 +1,7 @@
 # OpenViking for Microsoft Agent Framework
 
 An optional Python package for MAF agents. It recalls OpenViking context before a
-run and captures completed user/assistant turns, including tool calls and results.
+run and captures completed agent runs, including tool calls and results.
 The application explicitly commits a conversation for memory extraction.
 
 ## Install and try
@@ -51,7 +51,13 @@ completion before checking extracted memory. Close the client in the application
   same authenticated user. Preserve message IDs when replaying previous messages.
 - Recalled context is attributed reference data and is excluded from capture.
   System instructions, hidden reasoning, and nontext media are also excluded.
-- Fully consume streaming responses. Interrupted streams are not captured.
+- Fully consume streaming responses. Capture happens after each completed agent
+  run, including each `AgentLoopMiddleware` iteration, for both streaming and
+  non-streaming runs. If a later iteration is interrupted, earlier completed
+  iterations remain captured; the interrupted iteration is excluded.
+- Middleware must preserve provider state. `fresh_context=True` rolls that state
+  back between loop iterations and is unsupported; detected state resets raise
+  before further capture or commit.
 - Errors propagate. Unconfirmed capture blocks another run and `commit()`.
   `flush(session)` retries pending messages after a known failure before sending.
   A lost response can mean the server already appended the messages: inspect
