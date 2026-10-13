@@ -1975,6 +1975,25 @@ class Session:
         tracker = get_task_tracker()
         request_wait_tracker = get_request_wait_tracker()
 
+        async def _report_stage(stage: str) -> None:
+            """Report task progress without changing the session commit outcome."""
+            try:
+                await tracker.update_stage(
+                    task_id,
+                    stage,
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning(
+                    "Failed to report session commit task=%s stage=%s",
+                    task_id,
+                    stage,
+                    exc_info=True,
+                )
+
         memories_extracted: Dict[str, int] = {}
         usage_events_extracted = 0
         extracted_skill_results: list[dict] = []
@@ -1985,6 +2004,12 @@ class Session:
         archive_index = self._archives.archive_index_from_uri(archive_uri)
 
         try:
+            await tracker.start(
+                task_id,
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+                stage="preparing",
+            )
             (
                 messages,
                 coverage_start_archive,
@@ -1997,14 +2022,10 @@ class Session:
             first_message_id = messages[0].id
             last_message_id = messages[-1].id
 
-            await tracker.start(
-                task_id,
-                account_id=self.ctx.account_id,
-                user_id=self.ctx.user.user_id,
-            )
             request_wait_tracker.register_request(telemetry.telemetry_id)
             register_telemetry(telemetry)
             try:
+                await _report_stage("processing_memory")
                 with bind_telemetry(telemetry):
                     ov_config = get_openviking_config()
                     effective_policy = MemoryPolicy.from_dict(memory_policy)
@@ -2346,6 +2367,7 @@ class Session:
                                     exc,
                                 )
 
+                await _report_stage("waiting_for_queues")
                 try:
                     await request_wait_tracker.wait_for_request(
                         telemetry.telemetry_id,
@@ -2367,6 +2389,7 @@ class Session:
                 request_wait_tracker.cleanup(telemetry.telemetry_id)
                 unregister_telemetry(telemetry.telemetry_id)
 
+            await _report_stage("finalizing")
             # Phase 2 complete — update meta with telemetry and commit info
             snapshot = telemetry.finish("ok")
             _publish_telemetry_summary_best_effort(snapshot)

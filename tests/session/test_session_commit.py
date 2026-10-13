@@ -115,6 +115,48 @@ class TestCommit:
         # The extraction stub emits no semantic or embedding work. Its task
         # completion above is the relevant processing boundary for this test.
 
+    async def test_commit_task_reports_phase2_stages(
+        self,
+        wm_session_with_messages: Session,
+    ):
+        wm_session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+
+        result = await wm_session_with_messages.commit_async()
+        await _wait_for_task(result["task_id"])
+        task = await get_task_tracker().get(result["task_id"])
+        events = task.to_dict(include_events=True)["execution_events"]["items"]
+
+        assert [event["stage"] for event in events if event["kind"] == "stage_changed"] == [
+            "preparing",
+            "processing_memory",
+            "waiting_for_queues",
+            "finalizing",
+        ]
+        assert task.stage == "completed"
+
+    async def test_commit_succeeds_when_progress_stage_updates_fail(
+        self,
+        wm_session_with_messages: Session,
+        monkeypatch,
+    ):
+        wm_session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+        tracker = get_task_tracker()
+
+        async def fail_stage_update(*_args, **_kwargs):
+            raise OSError("task progress store is unavailable")
+
+        monkeypatch.setattr(tracker, "update_stage", fail_stage_update)
+
+        result = await wm_session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert task_result["stage"] == "completed"
+
     async def test_phase2_splits_with_the_committed_auto_commit_policy(
         self,
         wm_session_with_messages: Session,
