@@ -169,6 +169,14 @@ class OpenVikingStore(BaseStore):
                 "TTL is not supported by OpenVikingStore. "
                 "OpenViking stores LangGraph values as durable content records."
             )
+        if value is None:
+            # LangGraph's BaseStore.put defines None as a deletion signal. The
+            # batch / async paths already routed None to delete(); the sync
+            # override must do the same so put(None) is idempotent on a
+            # missing key and removes an existing item instead of persisting
+            # a null-valued record.
+            self.delete(namespace, key)
+            return
         namespace = tuple(namespace)
         if value is None:
             self.delete(namespace, key)
