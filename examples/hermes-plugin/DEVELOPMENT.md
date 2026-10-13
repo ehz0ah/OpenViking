@@ -86,6 +86,9 @@ both the SDK 2 read-only annotation fix (Hermes #133532) and the CLI approval
 callback fix. The plugin manifest requires `>=0.21.6`, and CI uses the release
 commit `818c13be1dc4fd28987e1e881a9408224afd4535`.
 
+The server minimum is OpenViking 0.4.23, which adds MCP read-only annotations.
+Quick Local setup upgrades older runtimes to a compatible release before use.
+
 Existing trust settings and filters are preserved. An existing entry without
 `trust` retains Hermes's implicit `full` policy. Do not change server annotations
 in the adapter. `search`, `remember`, `write` and `forget` require approval under

@@ -118,7 +118,6 @@ _SYNC_TRACE_ENV = "HERMES_OPENVIKING_SYNC_TRACE"
 _RECALL_QUERY_MIN_CHARS = 5
 _RECALL_MIN_TIMEOUT_SECONDS = 0.05
 _DEFAULT_RECALL_REQUEST_TIMEOUT_SECONDS = 3.0
-_LEVEL_ENDPOINTS = {"abstract": "/api/v1/content/abstract", "overview": "/api/v1/content/overview", "full": "/api/v1/content/read"}
 _RECALL_SUMMARY_KEYS = ("abstract", "overview", "text", "content")
 
 

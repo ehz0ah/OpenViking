@@ -438,9 +438,12 @@ def test_existing_openviking_without_local_embedding_runtime_is_not_reused(
     assert "import llama_cpp" in run.call_args.args[0][2]
 
 
-def test_existing_openviking_with_local_embedding_runtime_is_reused(
+@pytest.mark.parametrize("version, compatible", [("0.4.22", False), ("0.4.23", True), ("0.4.24", True), ("0.5.0", False)])
+def test_existing_local_runtime_meets_mcp_server_requirement(
     tmp_path,
     monkeypatch,
+    version,
+    compatible,
 ):
     paths = quick_local.managed_paths(tmp_path)
     paths.runtime_python.parent.mkdir(parents=True)
@@ -451,12 +454,12 @@ def test_existing_openviking_with_local_embedding_runtime_is_reused(
         "run",
         lambda *_args, **_kwargs: SimpleNamespace(
             returncode=0,
-            stdout="0.4.22\n",
+            stdout=version + "\n",
             stderr="",
         ),
     )
 
-    assert quick_local.openviking_install_satisfies_requirement(paths) is True
+    assert quick_local.openviking_install_satisfies_requirement(paths) is compatible
 
 
 def test_validation_server_does_not_inherit_stdin(tmp_path, monkeypatch):

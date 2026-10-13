@@ -25,6 +25,7 @@ _ENV_KEYS = tuple(
         "USER",
         "AGENT",
         "CLI_CONFIG_FILE",
+        "EXTRA_HEADERS",
     )
 )
 _TRANSPORT_ENV_KEYS = (
@@ -83,6 +84,15 @@ def _tls_error(exc):
 def _error_hint(exc):
     import httpx2
 
+    statuses = {
+        getattr(error, "status_code", None)
+        or getattr(getattr(error, "response", None), "status_code", None)
+        for error in _error_chain(exc)
+    }
+    if 401 in statuses:
+        return "OpenViking authentication failed. Check the API key and gateway headers."
+    if 403 in statuses:
+        return "OpenViking access was denied. Check the API key, gateway headers and access permissions."
     if any(
         "ROOT API keys cannot access tenant-scoped data APIs" in str(error)
         for error in _error_chain(exc)
@@ -92,12 +102,12 @@ def _error_hint(exc):
         return "TLS verification failed. Check SSL_CERT_FILE, SSL_CERT_DIR or ssl_verify."
     if any(isinstance(error, FileNotFoundError) for error in _error_chain(exc)):
         return "A configured file is missing. Check the CA and client certificate paths."
+    if any(isinstance(error, httpx2.ConnectError) for error in _error_chain(exc)):
+        return "Cannot connect to OpenViking. Check the server, endpoint and proxy settings."
     if any(
         isinstance(error, (TimeoutError, httpx2.TimeoutException)) for error in _error_chain(exc)
     ):
         return "The request timed out. Check the server and the configured timeout."
-    if isinstance(_leaf_error(exc), httpx2.ConnectError):
-        return "Cannot connect to OpenViking. Check the server, endpoint and proxy settings."
     return f"Request failed ({type(_leaf_error(exc)).__name__}). Check the server and its /mcp endpoint."
 
 
@@ -154,7 +164,7 @@ def profile_entry(home, env):
     home_token = set_hermes_home_override(home)
     secret_token = set_secret_scope(env, profile_home=str(home))
     try:
-        return load_config_readonly().get("mcp_servers", {}).get(SERVER_NAME, {})
+        return (load_config_readonly().get("mcp_servers") or {}).get(SERVER_NAME, {})
     finally:
         reset_secret_scope(secret_token)
         reset_hermes_home_override(home_token)
@@ -181,25 +191,32 @@ class Connection:
         import httpx2
 
         _, entry, managed = await asyncio.to_thread(self.resolve)
-        async with asyncio.timeout(float(entry.get("connect_timeout") or 60)):
-            while True:
-                try:
-                    return await self.request("tools/list", params)
-                except Exception as exc:
-                    error = _leaf_error(exc)
-                    # A different local service can occupy the saved port while
-                    # the provider moves Quick Local. Only discovery waits;
-                    # tool calls never retry or dispatch with failed auth.
-                    starting = (isinstance(error, httpx2.ConnectError) and not _tls_error(exc)) or (
-                        isinstance(error, self.ov._OpenVikingHTTPError)
-                        and (
-                            error.status_code == 503
-                            or (managed and error.status_code in {401, 403})
+        retry_error = None
+        try:
+            async with asyncio.timeout(float(entry.get("connect_timeout") or 60)):
+                while True:
+                    try:
+                        return await self.request("tools/list", params)
+                    except Exception as exc:
+                        error = _leaf_error(exc)
+                        # A different local service can occupy the saved port while
+                        # the provider moves Quick Local. Only discovery waits;
+                        # tool calls never retry or dispatch with failed auth.
+                        starting = (isinstance(error, httpx2.ConnectError) and not _tls_error(exc)) or (
+                            isinstance(error, self.ov._OpenVikingHTTPError)
+                            and (
+                                error.status_code == 503
+                                or (managed and error.status_code in {401, 403})
+                            )
                         )
-                    )
-                    if not starting:
-                        raise
-                    await asyncio.sleep(0.25)
+                        if not starting:
+                            raise
+                        retry_error = exc
+                        await asyncio.sleep(0.25)
+        except TimeoutError as exc:
+            if retry_error is not None:
+                raise exc from retry_error
+            raise
 
 
 async def _request(ov, values, entry, method, params):
@@ -261,11 +278,13 @@ def validate_connection(ov, values):
     from hermes_cli.config import load_config_readonly
     from tools.mcp_tool_common import mcp_server_enabled
 
+    extra_headers = ov._parse_extra_headers(values.get("extra_headers"))
     values = {
         key: values.get(key) or ("default" if key in {"account", "user"} else "")
         for key in ov._CONNECTION_KEYS
     }
-    entry = load_config_readonly().get("mcp_servers", {}).get(SERVER_NAME, {})
+    values["extra_headers"] = extra_headers
+    entry = (load_config_readonly().get("mcp_servers") or {}).get(SERVER_NAME, {})
     if not mcp_server_enabled(entry):
         return True, ""
     try:

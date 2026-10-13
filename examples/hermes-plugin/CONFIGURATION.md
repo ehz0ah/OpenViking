@@ -89,10 +89,8 @@ process. For the launch profile, process-level `OPENVIKING_*` values fill missin
 at activation. A messaging gateway without that snapshot does not read them.
 Routed profiles never inherit the launch profile's process values.
 
-OpenViking 0.4.1 or newer with its `/mcp` endpoint is required for MCP tools. Older servers with a status-only health
-response do not provide the user identity needed by this plugin. The `viking://~`
-home address requires OpenViking 0.4.16 or newer for user and admin keys, or
-0.4.17 or newer for root keys and local development.
+OpenViking 0.4.23 or newer with its `/mcp` endpoint is required for MCP tools.
+This version adds the read-only annotations used by Hermes's approval policy.
 
 | Environment variable | Default | Description |
 |---------|---------|-------------|

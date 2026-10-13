@@ -300,7 +300,7 @@ def test_failed_identity_probe_never_dispatches_or_retries_a_write(external_prov
     mcp = importlib.import_module(module.__name__ + ".mcp_tools")
     with mcp_server(status_code=status) as (endpoint, requests, *_):
         configure_home(home, endpoint)
-        with pytest.raises(module._OpenVikingHTTPError):
+        with pytest.raises(module._OpenVikingHTTPError) as caught:
             asyncio.run(
                 mcp.Connection(home, module).request(
                     "tools/call",
@@ -308,6 +308,12 @@ def test_failed_identity_probe_never_dispatches_or_retries_a_write(external_prov
                 )
             )
         assert len(requests) == 1 and requests[0][2] is None
+        hint = mcp._error_hint(ExceptionGroup("private transport detail", [caught.value]))
+        if status == 401:
+            assert "authentication failed" in hint and "API key" in hint
+        elif status == 403:
+            assert "access was denied" in hint and "access permissions" in hint
+        assert "rejected" not in hint and "key-alice" not in hint
 
 
 @pytest.mark.parametrize(
@@ -412,6 +418,49 @@ def test_setup_checks_mcp_without_changing_saved_connection(external_provider):
         assert len(requests) == 1
 
 
+def test_null_mcp_config_resolves_and_validates_before_setup(external_provider):
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    home, _, module, _ = external_provider("mcp-null-config")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    with mcp_server() as (endpoint, requests, *_):
+        config = configure_home(home, endpoint)
+        config["mcp_servers"] = None
+        (home / "config.yaml").write_text(json.dumps(config))
+        values, entry, _ = mcp.Connection(home, module).resolve()
+        assert entry == {}
+        token = set_hermes_home_override(home)
+        try:
+            assert mcp.validate_connection(module, values) == (True, "")
+        finally:
+            reset_hermes_home_override(token)
+        assert any(body and body.get("method") == "tools/list" for _, _, body in requests)
+        mcp.configure(config, str(home))
+        assert config["mcp_servers"]["openviking"]["trust"] == "untrusted"
+
+
+@pytest.mark.parametrize("linked", [False, True])
+def test_gateway_headers_reach_discovery_and_setup_validation(external_provider, linked):
+    home, _, module, _ = external_provider("mcp-gateway-headers")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    with mcp_server() as (endpoint, requests, *_):
+        configure_home(home, endpoint, linked=linked)
+        extra = {"CF-Access-Client-Id": "synthetic-id", "CF-Access-Client-Secret": "synthetic-secret"}
+        if linked:
+            path = home / "ovcli.conf"
+            config = json.loads(path.read_text())
+            config["extra_headers"] = extra
+            path.write_text(json.dumps(config))
+        else:
+            with (home / ".env").open("a") as env:
+                env.write("OPENVIKING_EXTRA_HEADERS=" + json.dumps(extra) + "\n")
+        connection = mcp.Connection(home, module)
+        assert asyncio.run(connection.request("tools/list", None)).tools
+        values, _, _ = connection.resolve()
+        assert mcp.validate_connection(module, values) == (True, "")
+        assert all(all(headers.get(k) == v for k, v in extra.items()) for _, headers, _ in requests)
+
+
 @pytest.mark.parametrize("managed", [False, True])
 def test_discovery_waits_for_managed_port_recovery_only(external_provider, monkeypatch, managed):
     home, _, module, _ = external_provider("mcp-discovery-recovery")
@@ -457,6 +506,44 @@ def test_discovery_timeout_is_bounded(external_provider, monkeypatch):
         with pytest.raises(TimeoutError):
             asyncio.run(connection.discover(None))
         assert len(requests) == 1
+
+
+def test_discovery_deadline_preserves_connection_failure_hint(external_provider, monkeypatch):
+    import socket
+
+    home, _, module, _ = external_provider("mcp-unreachable-discovery")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    with socket.socket() as unavailable:
+        unavailable.bind(("127.0.0.1", 0))
+        endpoint = f"http://127.0.0.1:{unavailable.getsockname()[1]}"
+        unavailable.close()
+        configure_home(home, endpoint)
+        connection = mcp.Connection(home, module)
+        values, entry, _ = connection.resolve()
+        entry["connect_timeout"] = 1
+        monkeypatch.setattr(connection, "resolve", lambda: (values, entry, False))
+        with pytest.raises(TimeoutError) as caught:
+            asyncio.run(connection.discover(None))
+        assert "Cannot connect to OpenViking" in mcp._error_hint(caught.value)
+
+
+def test_discovery_slow_request_is_still_reported_as_timeout(external_provider, monkeypatch):
+    home, _, module, _ = external_provider("mcp-slow-discovery")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    with mcp_server() as (endpoint, requests, _, entered, release):
+        configure_home(home, endpoint)
+        release.clear()
+        connection = mcp.Connection(home, module)
+        values, entry, _ = connection.resolve()
+        entry["connect_timeout"] = 0.1
+        monkeypatch.setattr(connection, "resolve", lambda: (values, entry, False))
+        try:
+            with pytest.raises(TimeoutError) as caught:
+                asyncio.run(connection.discover(None))
+            assert entered.is_set() and len(requests) == 1
+            assert "timed out" in mcp._error_hint(caught.value)
+        finally:
+            release.set()
 
 
 @pytest.mark.parametrize("managed", [False, True])
@@ -532,10 +619,13 @@ def test_root_key_rejection_has_a_safe_credential_hint(external_provider):
     assert "private account details" not in hint
 
 
+@pytest.mark.parametrize("servers", [None, {}])
 def test_migration_notice_is_visible_once_without_writing_to_stdout(
-    external_provider, caplog, capsys
+    external_provider, caplog, capsys, servers
 ):
     home, provider, _, _ = external_provider("mcp-migration-notice")
+    config = {"memory": {"provider": "openviking"}, "mcp_servers": servers}
+    (home / "config.yaml").write_text(json.dumps(config))
     provider._hermes_home = str(home)
     callbacks = []
     provider._runtime_warning_callback = callbacks.append

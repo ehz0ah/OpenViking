@@ -206,7 +206,7 @@ in `$HERMES_HOME/openviking/`.
 - Hermes v0.21.6 or newer.
 - Python 3.11 or newer in the Hermes environment.
 - OpenViking Service, Quick Local or a reachable OpenViking server.
-- OpenViking 0.4.1 or newer with its `/mcp` endpoint for Custom connections.
+- OpenViking 0.4.23 or newer with its `/mcp` endpoint for Custom connections.
 
 Tested with Hermes v0.21.6 at the release commit used in
 [CI](../../.github/workflows/hermes-plugin-tests.yml).
