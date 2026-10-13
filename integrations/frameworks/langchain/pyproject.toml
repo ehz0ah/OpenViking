@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "setuptools-scm>=8.0", "wheel"]
+requires = ["setuptools>=77.0", "setuptools-scm>=8.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -12,6 +12,7 @@ authors = [
     {name = "ByteDance", email = "noreply@bytedance.com"},
 ]
 license = "AGPL-3.0"
+license-files = ["LICENSE", "examples/LICENSE"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

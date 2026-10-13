@@ -22,6 +22,10 @@ def test_server_distribution_does_not_depend_on_standalone_integration():
     assert 'name = "langchain-openviking"' not in root_lock
 
 
+def test_server_source_excludes_removed_framework_namespace():
+    assert not (PROJECT_ROOT / "openviking" / "integrations").exists()
+
+
 def test_standalone_package_has_no_server_imports_at_module_scope():
     violations: list[str] = []
     source_files = sorted((SOURCE_ROOT / "langchain_openviking").glob("*.py"))

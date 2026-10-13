@@ -64,4 +64,5 @@ python -m pytest -q --noconftest -o addopts='' \
   integrations/frameworks/langchain/tests tests/unit/test_langchain_package_boundary.py
 ```
 
-适配器使用 AGPL-3.0；可运行[示例](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/langchain/examples/LICENSE)保留 Apache-2.0 许可。
+包元数据和源码声明 AGPL-3.0，详见 [LICENSE](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/langchain/LICENSE)。
+可运行[示例](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/langchain/examples/LICENSE)保留 Apache-2.0 许可。

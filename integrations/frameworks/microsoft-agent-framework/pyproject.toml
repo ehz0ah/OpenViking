@@ -9,6 +9,7 @@ description = "OpenViking context provider for Microsoft Agent Framework"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "AGPL-3.0"
+license-files = ["LICENSE", "examples/LICENSE"]
 dependencies = ["agent-framework-core>=1.20,<2", "openviking-sdk>=0.1.13,<0.2"]
 
 [project.optional-dependencies]

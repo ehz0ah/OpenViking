@@ -81,4 +81,5 @@ python -m pytest -q --noconftest -o addopts='' \
   integrations/frameworks/langchain/tests tests/unit/test_langchain_package_boundary.py
 ```
 
-The adapter is AGPL-3.0; the runnable [examples](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/langchain/examples/LICENSE) retain Apache-2.0.
+Package metadata and source headers declare AGPL-3.0; see [LICENSE](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/langchain/LICENSE).
+The runnable [examples](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/langchain/examples/LICENSE) retain Apache-2.0.
