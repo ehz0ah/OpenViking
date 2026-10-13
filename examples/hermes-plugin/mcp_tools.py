@@ -208,7 +208,9 @@ class Connection:
                         # A different local service can occupy the saved port while
                         # the provider moves Quick Local. Only discovery waits;
                         # tool calls never retry or dispatch with failed auth.
-                        starting = (isinstance(error, httpx2.ConnectError) and not _tls_error(exc)) or (
+                        starting = (managed and isinstance(error, _UnverifiedServerError)) or (
+                            isinstance(error, httpx2.ConnectError) and not _tls_error(exc)
+                        ) or (
                             isinstance(error, self.ov._OpenVikingHTTPError)
                             and (
                                 error.status_code == 503

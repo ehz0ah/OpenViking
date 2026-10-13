@@ -48,6 +48,8 @@ def mcp_server(*, trusted=False, status_code=200, call_delay=0,
         def do_GET(self):
             requests.append((self.path, dict(self.headers), None))
             if self.path == "/health":
+                if health_payload is not None:
+                    entered.set()
                 if health_auth and "Authorization" not in self.headers:
                     return self.respond({"error": {"message": "Authentication required"}}, 401)
                 if health_status == 302:
@@ -503,10 +505,11 @@ def test_gateway_headers_reach_discovery_and_setup_validation(external_provider,
 
 
 @pytest.mark.parametrize("managed", [False, True])
-def test_discovery_waits_for_managed_port_recovery_only(external_provider, monkeypatch, managed):
+@pytest.mark.parametrize("unverified", [False, True])
+def test_discovery_waits_for_managed_port_recovery_only(external_provider, monkeypatch, managed, unverified):
     home, _, module, _ = external_provider("mcp-discovery-recovery")
     mcp = importlib.import_module(module.__name__ + ".mcp_tools")
-    with mcp_server(status_code=401) as foreign, mcp_server() as owned:
+    with mcp_server(status_code=401, health_payload={} if unverified else None) as foreign, mcp_server() as owned:
         configure_home(home, foreign[0])
         connection = mcp.Connection(home, module)
         resolve = connection.resolve
@@ -530,9 +533,11 @@ def test_discovery_waits_for_managed_port_recovery_only(external_provider, monke
         if managed:
             assert asyncio.run(recover()).tools[0].name == "forget"
         else:
-            with pytest.raises(module._OpenVikingHTTPError):
+            with pytest.raises(mcp._UnverifiedServerError if unverified else module._OpenVikingHTTPError):
                 asyncio.run(recover())
         assert not any(body for _, _, body in foreign[1])
+        if unverified:
+            assert all("Authorization" not in h and "X-API-Key" not in h for _, h, _ in foreign[1])
 
 
 def test_discovery_timeout_is_bounded(external_provider, monkeypatch):
