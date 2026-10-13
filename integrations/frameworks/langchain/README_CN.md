@@ -44,5 +44,24 @@ finally:
 
 外部传入的 client 仍由调用方管理。通过 `url=` 创建的 client 由适配器管理。
 
-完整 `openviking` 包会继续保留原有的
-`openviking.integrations.langchain` 导入路径，并转发到本包，方便现有应用平滑迁移。
+## 导入迁移
+
+服务端包不再提供 `openviking.integrations.langchain`。请安装独立包，并将导入改为：
+
+```python
+from langchain_openviking import OpenVikingRetriever
+```
+
+参见[示例](https://github.com/volcengine/OpenViking/tree/main/integrations/frameworks/langchain/examples)和[框架适配指南](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/README.md)。
+
+## 验证
+
+在仓库根目录运行：
+
+```bash
+pip install -e 'integrations/frameworks/langchain[langgraph,test,dev]'
+python -m pytest -q --noconftest -o addopts='' \
+  integrations/frameworks/langchain/tests tests/unit/test_langchain_package_boundary.py
+```
+
+适配器使用 AGPL-3.0；可运行[示例](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/langchain/examples/LICENSE)保留 Apache-2.0 许可。

@@ -18,7 +18,7 @@ dev = ["ruff", "mypy", "build", "twine"]
 
 [project.urls]
 Repository = "https://github.com/volcengine/OpenViking"
-Documentation = "https://github.com/volcengine/OpenViking/tree/main/examples/agent-framework"
+Documentation = "https://github.com/volcengine/OpenViking/tree/main/integrations/frameworks/microsoft-agent-framework"
 Issues = "https://github.com/volcengine/OpenViking/issues/new/choose"
 
 [tool.setuptools.packages.find]

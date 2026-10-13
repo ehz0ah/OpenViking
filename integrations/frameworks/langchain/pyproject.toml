@@ -62,7 +62,7 @@ include = ["langchain_openviking*"]
 langchain_openviking = ["py.typed"]
 
 [tool.setuptools_scm]
-root = "../.."
+root = "../../.."
 local_scheme = "no-local-version"
 tag_regex = "^langchain-openviking@(?P<version>[0-9]+(?:\\.[0-9]+)*)$"
 git_describe_command = "git describe --dirty --tags --long --match langchain-openviking@*"

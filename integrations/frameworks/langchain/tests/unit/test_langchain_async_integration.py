@@ -13,6 +13,7 @@ pytest.importorskip("langgraph")
 pytest.importorskip("langchain_openviking")
 
 from langchain_core.messages import AIMessage, HumanMessage
+
 from langchain_openviking import (
     InMemoryOpenVikingClient,
     OpenVikingCancellationProgress,

@@ -11,6 +11,7 @@ pytest.importorskip("langchain_openviking")
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableLambda
+
 from langchain_openviking import (
     InMemoryOpenVikingClient,
     OpenVikingCommitPolicy,

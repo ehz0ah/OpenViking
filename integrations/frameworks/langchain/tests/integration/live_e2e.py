@@ -17,6 +17,11 @@ from langchain_core.language_models.chat_models import SimpleChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableLambda
 from langchain_core.runnables.history import RunnableWithMessageHistory
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from openai import OpenAI
+from typing_extensions import Annotated, TypedDict
+
 from langchain_openviking import (
     OpenVikingChatMessageHistory,
     OpenVikingContextMiddleware,
@@ -26,10 +31,6 @@ from langchain_openviking import (
     with_openviking_context,
 )
 from langchain_openviking.client import extract_message_text
-from langgraph.graph import END, START, StateGraph
-from langgraph.graph.message import add_messages
-from openai import OpenAI
-from typing_extensions import Annotated, TypedDict
 
 
 def test_true_live_langchain_context_backend_e2e():

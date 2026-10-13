@@ -10,14 +10,14 @@ Requires Python 3.10+, MAF core 1.20–1.x, OpenViking SDK 0.1.13–0.1.x, and a
 running OpenViking 0.4.23+ server. Install from an OpenViking checkout:
 
 ```bash
-pip install './examples/agent-framework[example]'
+pip install './integrations/frameworks/microsoft-agent-framework[example]'
 ```
 
 Set `OPENVIKING_URL`, `OPENVIKING_API_KEY` (a normal user key), `OPENAI_API_KEY`,
 `OPENAI_BASE_URL`, and `OPENAI_MODEL`, then run:
 
 ```bash
-python examples/agent-framework/example.py
+python integrations/frameworks/microsoft-agent-framework/examples/example.py
 ```
 
 The example records a preference, waits for extraction, and asks about it in a new
@@ -104,8 +104,8 @@ execution and chat history. No framework modifications or MCP tools are required
 ## Validate
 
 ```bash
-pip install -e './examples/agent-framework[test,dev]'
-cd examples/agent-framework
+pip install -e './integrations/frameworks/microsoft-agent-framework[test,dev]'
+cd integrations/frameworks/microsoft-agent-framework
 pytest -q --confcutdir=tests tests
 ruff check .
 ruff format --check .
@@ -116,3 +116,6 @@ python -m build
 Offline tests use the real MAF agent lifecycle with deterministic model and SDK
 boundaries. They require no server, credentials, or model calls. Support belongs
 in [OpenViking issues](https://github.com/volcengine/OpenViking/issues/new/choose).
+
+See the [framework adapter guide](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/README.md) for adding other integrations.
+The adapter is AGPL-3.0; the runnable [example](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/microsoft-agent-framework/examples/LICENSE) retains Apache-2.0.

@@ -7,7 +7,6 @@ import pytest
 pytest.importorskip("langchain_core")
 pytest.importorskip("langchain_openviking")
 
-import langchain_openviking.recording as recording_module
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -15,6 +14,8 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+
+import langchain_openviking.recording as recording_module
 from langchain_openviking import (
     InMemoryOpenVikingClient,
     OpenVikingChatMessageHistory,

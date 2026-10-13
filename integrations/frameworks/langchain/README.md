@@ -1,6 +1,6 @@
 # langchain-openviking
 
-> **Working memory is now opt-in.** Update installed plugins separately from the OV server, then restart the host. Existing explicit settings still take precedence. See the [default-off upgrade guide](../../docs/en/guides/working-memory-default-off.md) for native history, re-enabling WM, and old-conversation handoffs.
+> **Working memory is now opt-in.** Update installed plugins separately from the OV server, then restart the host. Existing explicit settings still take precedence. See the [default-off upgrade guide](https://github.com/volcengine/OpenViking/blob/main/docs/en/guides/working-memory-default-off.md) for native history, re-enabling WM, and old-conversation handoffs.
 
 `langchain-openviking` is the official OpenViking integration package for
 LangChain and LangGraph applications. It keeps framework-specific adapters
@@ -59,8 +59,26 @@ The package also provides `OpenVikingSessionRecorder`,
 - Clients created from `url=` are managed by the adapter and can be closed with
   `close()` or `aclose()` as documented by each adapter.
 
-The previous `openviking.integrations.langchain` import path remains available
-from the full `openviking` distribution as a compatibility shim.
+## Import migration
 
-See the [OpenViking documentation](https://openviking.ai) and the repository's
-`examples/langchain-langgraph` directory for complete examples.
+The server distribution no longer provides `openviking.integrations.langchain`.
+Install this standalone package and change imports to `langchain_openviking`:
+
+```python
+from langchain_openviking import OpenVikingRetriever
+```
+
+See the [OpenViking documentation](https://openviking.ai), [examples](https://github.com/volcengine/OpenViking/tree/main/integrations/frameworks/langchain/examples),
+and the [framework adapter guide](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/README.md).
+
+## Validate
+
+From the repository root:
+
+```bash
+pip install -e 'integrations/frameworks/langchain[langgraph,test,dev]'
+python -m pytest -q --noconftest -o addopts='' \
+  integrations/frameworks/langchain/tests tests/unit/test_langchain_package_boundary.py
+```
+
+The adapter is AGPL-3.0; the runnable [examples](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/langchain/examples/LICENSE) retain Apache-2.0.

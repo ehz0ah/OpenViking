@@ -13,6 +13,7 @@ pytest.importorskip("langchain_openviking")
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableLambda
 from langchain_core.runnables.history import RunnableWithMessageHistory
+
 from langchain_openviking import (
     OpenVikingCommitPolicy,
     OpenVikingContextRunnable,
