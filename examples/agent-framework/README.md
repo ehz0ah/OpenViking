@@ -2,7 +2,7 @@
 
 An optional Python package for MAF agents. It recalls OpenViking context before a
 run and captures completed agent runs, including tool calls and results.
-The application explicitly commits a conversation for memory extraction.
+The application controls when memory extraction is requested.
 
 ## Install and try
 
@@ -43,6 +43,37 @@ job = await memory.commit(session)
 
 `commit()` returns task acceptance. Poll `client.get_task(job["task_id"])` until
 completion before checking extracted memory. Close the client in the application.
+
+## Capture and commit policies
+
+```python
+memory = OpenVikingContextProvider(
+    client,
+    capture=True,
+    commit_policy="pending_tokens",
+    commit_token_threshold=20_000,
+)
+```
+
+| `commit_policy` | Behavior |
+| --- | --- |
+| `"never"` (default) | Capture automatically; the application calls `commit(session)` |
+| `"always"` | Request a commit after each completed, captured agent invocation |
+| `"pending_tokens"` | Request a commit when OV's post-capture pending tokens reach the threshold |
+
+The threshold defaults to 20,000 and must be a positive integer. It counts the
+session's captured, uncommitted tokens; `token_budget` controls recalled context.
+Policies run only after all message batches are acknowledged. A successful
+`flush()` of pending capture also applies the policy. Commit or metadata errors
+propagate, but acknowledged messages remain recorded and are not sent again;
+the next completed invocation or an explicit `commit()` can retry the commit.
+Automatic commits start background extraction and do not wait for completion.
+
+Set `capture=False` for automatic recall without conversation uploads or
+automatic commits. Explicit `flush()` and `commit()` remain available. Turning
+capture off does not discard existing pending messages. The application still
+calls `commit()` at its conversation/workflow boundary to extract a tail below
+the threshold. These policies do not change OV's server-side auto-commit settings.
 
 ## State and failure handling
 

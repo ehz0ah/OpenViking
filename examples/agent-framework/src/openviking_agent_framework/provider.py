@@ -56,6 +56,8 @@ class OpenVikingContextProvider(ContextProvider):
     Use one provider per authenticated user and actor. Serialize runs for each MAF
     session. Different sessions may share a provider on the same asyncio event loop.
     The caller initializes and closes the client and persists MAF session state.
+    Capture defaults to enabled; commits default to explicit application requests.
+    Automatic policies run after acknowledged capture and never wait for extraction.
     """
 
     # Capture each completed agent run: loop-level streamed responses only contain
@@ -70,16 +72,28 @@ class OpenVikingContextProvider(ContextProvider):
         peer_scope: Literal["all", "actor"] = "all",
         limit: int = 5,
         token_budget: int = 4000,
+        capture: bool = True,
+        commit_policy: Literal["never", "always", "pending_tokens"] = "never",
+        commit_token_threshold: int = 20_000,
     ) -> None:
         if not source_id or limit < 1 or not 64 <= token_budget <= 32000:
             raise ValueError("source_id must be non-empty; limit > 0; token_budget in [64, 32000]")
         if peer_scope not in ("all", "actor"):
             raise ValueError("peer_scope must be 'all' or 'actor'")
+        if not isinstance(capture, bool):
+            raise ValueError("capture must be a boolean")
+        if commit_policy not in ("never", "always", "pending_tokens"):
+            raise ValueError("commit_policy must be 'never', 'always', or 'pending_tokens'")
+        if type(commit_token_threshold) is not int or commit_token_threshold < 1:
+            raise ValueError("commit_token_threshold must be a positive integer")
         super().__init__(source_id)
         self.client = client
         self.peer_scope = peer_scope
         self.limit = limit
         self.token_budget = token_budget
+        self.capture = capture
+        self.commit_policy = commit_policy
+        self.commit_token_threshold = commit_token_threshold
         self._write_lock = asyncio.Lock()
         self._session_states: WeakKeyDictionary[AgentSession, dict[str, Any]] = WeakKeyDictionary()
 
@@ -122,10 +136,11 @@ class OpenVikingContextProvider(ContextProvider):
                 "a lost acknowledgement may mean the messages were already appended."
             )
         state["capture_ready"] = False
-        context.extend_middleware(self.source_id, [_CaptureCompletion(state)])
-        for message in context.input_messages:
-            if message.message_id is None:
-                message.message_id = uuid4().hex
+        if self.capture:
+            context.extend_middleware(self.source_id, [_CaptureCompletion(state)])
+            for message in context.input_messages:
+                if message.message_id is None:
+                    message.message_id = uuid4().hex
         query = "\n".join(
             message.text
             for message in context.input_messages
@@ -156,29 +171,35 @@ class OpenVikingContextProvider(ContextProvider):
         context: SessionContext,
         state: dict[str, Any],
     ) -> None:
-        """Capture the completed turn, including function calls and their results."""
-        if context.response is None or not state.pop("capture_ready", False):
+        """Capture the completed run and apply its commit policy after acknowledgement."""
+        if not self.capture or context.response is None or not state.pop("capture_ready", False):
             return
         if state.get("pending_messages"):
             raise RuntimeError("OpenViking has pending capture; flush it before another run")
         messages = [*context.input_messages, *context.response.messages]
         recorded = set(state.get("recorded_message_ids", []))
         payloads = _messages(messages, recorded)
-        if not payloads:
+        if not payloads and not recorded:
             return
         # Retain capture even if cancellation happens while waiting for another session.
-        state["pending_messages"] = payloads
+        if payloads:
+            state["pending_messages"] = payloads
         async with self._write_lock:
             await self._flush(session)
+            await self._maybe_commit(session)
 
     async def flush(self, session: AgentSession) -> None:
         """Explicitly retry pending capture, removing only acknowledged batches.
 
         A lost HTTP response can mean the server already appended the batch.
         Check server records before retrying: the append API is not idempotent.
+        Recovered capture applies the automatic policy when capture is enabled.
         """
         async with self._write_lock:
+            had_pending = bool(self._state(session).get("pending_messages"))
             await self._flush(session)
+            if had_pending and self.capture:
+                await self._maybe_commit(session)
 
     async def _flush(self, session: AgentSession) -> None:
         state = self._state(session)
@@ -195,6 +216,18 @@ class OpenVikingContextProvider(ContextProvider):
                 message["source_message_ids"][0] for message in batch
             )
             del pending[: len(batch)]
+
+    async def _maybe_commit(self, session: AgentSession) -> None:
+        """Apply the policy under the write lock, after capture is acknowledged."""
+        if self.commit_policy == "never":
+            return
+        session_id = self._state(session)["session_id"]
+        if self.commit_policy == "pending_tokens":
+            metadata = await self.client.get_session(session_id)
+            if int(metadata.get("pending_tokens") or 0) < self.commit_token_threshold:
+                return
+        # Do not call commit(): this path already owns the non-reentrant lock.
+        await self.client.commit_session(session_id)
 
     async def commit(self, session: AgentSession) -> dict[str, Any]:
         """Request extraction after capture; task acceptance is not completion."""
