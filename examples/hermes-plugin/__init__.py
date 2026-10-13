@@ -609,9 +609,7 @@ def _normalize_openviking_url(url: str) -> str:
 
 
 def _is_modern_openviking_health(health: Any) -> bool:
-    return (isinstance(health, dict) and health.get("status") == "ok"
-            and health.get("healthy") is True
-            and isinstance(health.get("version"), str) and bool(health["version"].strip()))
+    return quick_local.is_openviking_health(health)
 
 
 def _probe_openviking_identity(client: _VikingClient) -> tuple[str, Any]:
@@ -1753,12 +1751,14 @@ class OpenVikingMemoryProvider(MemoryProvider):
             self._client = None
             return None
 
+        # The managed ownership check verifies anonymous health before using
+        # the key. The hosted-server probe may answer a 401/403 with credentials.
+        if managed and not quick_local.server_belongs_to_profile(paths, settings_key[0]):
+            self._failed_refresh = (settings_key, time.monotonic())
+            self._handle_runtime_openviking_unreachable(status_callback=status_callback, warning_callback=warning_callback)
+            return None
         health_state, health_message = _classify_runtime_openviking_health(client, settings_key[0])
         if health_state == "healthy":
-            if managed and not quick_local.server_belongs_to_profile(paths, settings_key[0]):
-                self._failed_refresh = (settings_key, time.monotonic())
-                self._handle_runtime_openviking_unreachable(status_callback=status_callback, warning_callback=warning_callback)
-                return None
             if managed:
                 quick_local.clear_server_restart_required(paths.server_config)
             self._publish_client(client, settings_key[0])

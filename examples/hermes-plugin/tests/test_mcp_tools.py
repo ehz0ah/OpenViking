@@ -540,6 +540,69 @@ def test_discovery_waits_for_managed_port_recovery_only(external_provider, monke
             assert all("Authorization" not in h and "X-API-Key" not in h for _, h, _ in foreign[1])
 
 
+@pytest.mark.parametrize("health_status", [401, 403])
+def test_managed_auth_challenge_waits_without_sending_credentials(external_provider, health_status):
+    home, _, module, _ = external_provider("mcp-managed-auth-recovery")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    foreign_health = {"status": "ok", "healthy": True, "version": "0.4.23",
+                      "auth_mode": "trusted", "root_api_key_required": True}
+    with mcp_server(health_status=health_status, health_payload=foreign_health) as foreign, mcp_server() as owned:
+        paths = module.quick_local.managed_paths(home)
+        paths.root.mkdir()
+        key = "synthetic-managed-root-key"
+        (home / "config.yaml").write_text(json.dumps({
+            "memory": {"provider": "openviking", "openviking": {"deployment": module.quick_local.DEPLOYMENT}},
+            "mcp_servers": {"openviking": {"connect_timeout": 5, "headers": {"X-Gateway-Secret": "gateway-key"}}},
+        }))
+        paths.server_config.write_text(json.dumps({"storage": {"workspace": str(paths.workspace)},
+                                                  "server": {"root_api_key": key}}))
+        profile = {"url": foreign[0], "root_api_key": key}
+        paths.ovcli_config.write_text(json.dumps(profile))
+        connection = mcp.Connection(home, module)
+
+        async def recover():
+            task = asyncio.create_task(connection.discover(None))
+            try:
+                assert await asyncio.to_thread(foreign[3].wait, 4)
+                profile["url"] = owned[0]
+                paths.ovcli_config.write_text(json.dumps(profile))
+                return await task
+            finally:
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+
+        assert asyncio.run(recover()).tools[0].name == "forget"
+        assert foreign[1]
+        for path, headers, body in foreign[1]:
+            assert path == "/health" and body is None
+            assert not {"Authorization", "X-API-Key", "X-Gateway-Secret"} & headers.keys()
+        assert any(headers.get("X-API-Key") == key for _, headers, _ in owned[1])
+
+
+@pytest.mark.parametrize("health_status", [401, 403])
+def test_managed_provider_checks_ownership_before_auth_probe(external_provider, monkeypatch, health_status):
+    home, provider, module, _ = external_provider("mcp-managed-provider-auth")
+    foreign_health = {"status": "ok", "healthy": True, "version": "0.4.23",
+                      "auth_mode": "trusted", "root_api_key_required": True}
+    with mcp_server(health_status=health_status, health_payload=foreign_health) as (endpoint, requests, *_):
+        paths = module.quick_local.managed_paths(home)
+        paths.root.mkdir()
+        key = "synthetic-managed-root-key"
+        (home / "config.yaml").write_text(json.dumps({"memory": {"provider": "openviking", "openviking": {
+            "deployment": module.quick_local.DEPLOYMENT,
+        }}}))
+        paths.server_config.write_text(json.dumps({"storage": {"workspace": str(paths.workspace)},
+                                                  "server": {"root_api_key": key}}))
+        paths.ovcli_config.write_text(json.dumps({"url": endpoint, "root_api_key": key}))
+        recovery = []
+        monkeypatch.setattr(provider, "_handle_runtime_openviking_unreachable", lambda **_kwargs: recovery.append(True))
+        provider.initialize("auth-port-recovery", hermes_home=str(home), platform="cli", agent_context="cron")
+        assert recovery and provider._client is None
+        assert requests
+        assert all("Authorization" not in h and "X-API-Key" not in h for _, h, _ in requests)
+
+
 def test_discovery_timeout_is_bounded(external_provider, monkeypatch):
     home, _, module, _ = external_provider("mcp-discovery-deadline")
     mcp = importlib.import_module(module.__name__ + ".mcp_tools")

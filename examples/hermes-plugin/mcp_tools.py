@@ -189,8 +189,8 @@ class Connection:
         return values, entry, config.get("deployment") == self.ov.quick_local.DEPLOYMENT
 
     async def request(self, method: str, params):
-        values, entry, _ = await asyncio.to_thread(self.resolve)
-        return await _request(self.ov, values, entry, method, params)
+        values, entry, managed = await asyncio.to_thread(self.resolve)
+        return await _request(self.ov, values, entry, method, params, managed=managed)
 
     async def discover(self, params):
         """Allow bounded startup recovery for every deployment; never own its process."""
@@ -227,7 +227,7 @@ class Connection:
             raise
 
 
-async def _request(ov, values, entry, method, params):
+async def _request(ov, values, entry, method, params, *, managed=False):
     import httpx2
     from mcp import ClientSession, types
     from mcp.client.streamable_http import streamable_http_client
@@ -265,6 +265,11 @@ async def _request(ov, values, entry, method, params):
         try:
             health = rest._parse_response(response)
         except ov._OpenVikingHTTPError as exc:
+            # Quick Local exposes anonymous health. A 401/403 at its saved port
+            # may belong to a foreign listener while the provider moves ports.
+            # Discovery may wait for that move, but must not send it the root key.
+            if managed and exc.status_code in {401, 403}:
+                raise _UnverifiedServerError() from exc
             # Preserve the provider's existing hosted-server authentication
             # challenge. An ordinary redirect never authorizes credentials.
             if not values["api_key"] or exc.status_code not in {401, 403}:
