@@ -608,6 +608,12 @@ def _normalize_openviking_url(url: str) -> str:
     return candidate
 
 
+def _is_modern_openviking_health(health: Any) -> bool:
+    return (isinstance(health, dict) and health.get("status") == "ok"
+            and health.get("healthy") is True
+            and isinstance(health.get("version"), str) and bool(health["version"].strip()))
+
+
 def _probe_openviking_identity(client: _VikingClient) -> tuple[str, Any]:
     """Identify modern or legacy OpenViking before any authenticated request.
     -> ("modern" | "legacy" | "legacy-unverified" | "unhealthy" | "invalid", health).
@@ -618,7 +624,7 @@ def _probe_openviking_identity(client: _VikingClient) -> tuple[str, Any]:
         return "unhealthy", health
     if not isinstance(health, dict) or health.get("status") != "ok":
         return "invalid", health
-    if health.get("healthy") is True and isinstance(health.get("version"), str) and health["version"].strip():
+    if _is_modern_openviking_health(health):
         return "modern", health
     if "healthy" in health or "version" in health:
         return "invalid", health

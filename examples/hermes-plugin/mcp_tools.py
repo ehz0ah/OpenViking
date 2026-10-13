@@ -49,6 +49,10 @@ _CONNECTION_HEADERS = {
 }
 
 
+class _UnverifiedServerError(RuntimeError):
+    pass
+
+
 def _leaf_error(exc):
     while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
         exc = exc.exceptions[0]
@@ -84,20 +88,22 @@ def _tls_error(exc):
 def _error_hint(exc):
     import httpx2
 
+    if any(isinstance(error, _UnverifiedServerError) for error in _error_chain(exc)):
+        return "The endpoint did not identify itself as OpenViking. Check the server URL."
     statuses = {
         getattr(error, "status_code", None)
         or getattr(getattr(error, "response", None), "status_code", None)
         for error in _error_chain(exc)
     }
-    if 401 in statuses:
-        return "OpenViking authentication failed. Check the API key and gateway headers."
-    if 403 in statuses:
-        return "OpenViking access was denied. Check the API key, gateway headers and access permissions."
     if any(
         "ROOT API keys cannot access tenant-scoped data APIs" in str(error)
         for error in _error_chain(exc)
     ):
         return "Use a user or admin OpenViking API key for memory tools. Root keys manage accounts."
+    if 401 in statuses:
+        return "OpenViking authentication failed. Check the API key and gateway headers."
+    if 403 in statuses:
+        return "OpenViking access was denied. Check the API key, gateway headers and access permissions."
     if _tls_error(exc):
         return "TLS verification failed. Check SSL_CERT_FILE, SSL_CERT_DIR or ssl_verify."
     if any(isinstance(error, FileNotFoundError) for error in _error_chain(exc)):
@@ -251,6 +257,21 @@ async def _request(ov, values, entry, method, params):
         ) as http,
     ):
         headers = {**extra, **rest._headers()}
+        response = await http.get(values["endpoint"] + "/health", headers={"Accept": "application/json"})
+        if 300 <= response.status_code < 400:
+            raise _UnverifiedServerError()
+        try:
+            health = rest._parse_response(response)
+        except ov._OpenVikingHTTPError as exc:
+            # Preserve the provider's existing hosted-server authentication
+            # challenge. An ordinary redirect never authorizes credentials.
+            if not values["api_key"] or exc.status_code not in {401, 403}:
+                raise
+            response = await http.get(values["endpoint"] + "/health",
+                                      headers={**extra, **rest._headers(include_tenant=False)})
+            health = rest._parse_response(response)
+        if not ov._is_modern_openviking_health(health):
+            raise _UnverifiedServerError()
         response = await http.get(values["endpoint"] + "/api/v1/system/status", headers=headers)
         try:
             rest._parse_response(response)

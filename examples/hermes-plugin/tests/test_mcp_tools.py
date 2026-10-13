@@ -14,7 +14,8 @@ import pytest
 
 
 @contextmanager
-def mcp_server(*, trusted=False, status_code=200, call_delay=0):
+def mcp_server(*, trusted=False, status_code=200, call_delay=0,
+               health_status=200, health_payload=None, health_auth=False):
     requests = []
     entered, release = threading.Event(), threading.Event()
     release.set()
@@ -46,6 +47,17 @@ def mcp_server(*, trusted=False, status_code=200, call_delay=0):
 
         def do_GET(self):
             requests.append((self.path, dict(self.headers), None))
+            if self.path == "/health":
+                if health_auth and "Authorization" not in self.headers:
+                    return self.respond({"error": {"message": "Authentication required"}}, 401)
+                if health_status == 302:
+                    self.send_response(302)
+                    self.send_header("Location", "https://www.example.com/canonical-location")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                return self.respond(health_payload if health_payload is not None else
+                                    {"status": "ok", "healthy": True, "version": "0.4.23"}, health_status)
             if self.path != "/api/v1/system/status":
                 return self.respond(status=405)
             entered.set()
@@ -286,7 +298,7 @@ def test_connection_snapshot_survives_reload_and_next_call_uses_new_connection(e
             asyncio.run(connection.request("tools/list", None))
             a_calls = [h for _, h, body in a[1] if body and body.get("method") == "tools/call"]
             assert a_calls[0]["Authorization"] == "Bearer key-alice"
-            assert all(h.get("Authorization") == "Bearer key-bob" for _, h, _ in b[1])
+            assert all(h.get("Authorization") == "Bearer key-bob" for path, h, _ in b[1] if path != "/health")
         finally:
             a[4].set()
             worker.join(10)
@@ -307,13 +319,41 @@ def test_failed_identity_probe_never_dispatches_or_retries_a_write(external_prov
                     types.CallToolRequestParams(name="forget", arguments={"uri": "exact.md"}),
                 )
             )
-        assert len(requests) == 1 and requests[0][2] is None
+        assert len(requests) == 2 and requests[-1][2] is None
+        assert requests[0][0] == "/health" and "Authorization" not in requests[0][1]
         hint = mcp._error_hint(ExceptionGroup("private transport detail", [caught.value]))
         if status == 401:
             assert "authentication failed" in hint and "API key" in hint
         elif status == 403:
             assert "access was denied" in hint and "access permissions" in hint
         assert "rejected" not in hint and "key-alice" not in hint
+
+
+@pytest.mark.parametrize("health_status, health_payload", [(302, None), (200, {}), (200, {"status": "ok", "healthy": False, "version": "0.4.23"})])
+def test_unverified_endpoint_never_receives_mcp_credentials(external_provider, health_status, health_payload):
+    home, _, module, _ = external_provider("mcp-unverified-endpoint")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    with mcp_server(health_status=health_status, health_payload=health_payload) as (endpoint, requests, *_):
+        configure_home(home, endpoint)
+        with (home / ".env").open("a") as env:
+            env.write('OPENVIKING_EXTRA_HEADERS={"CF-Access-Client-Secret":"synthetic-secret"}\n')
+        with pytest.raises(RuntimeError) as caught:
+            asyncio.run(mcp.Connection(home, module).request("tools/list", None))
+        assert "did not identify itself as OpenViking" in mcp._error_hint(caught.value)
+        assert len(requests) == 1 and requests[0][0] == "/health"
+        assert all(k not in requests[0][1] for k in ["X-API-Key", "Authorization", "CF-Access-Client-Secret", "X-Custom", "X-OpenViking-Actor-Peer"])
+
+
+def test_authenticated_health_challenge_keeps_existing_hosted_server_support(external_provider):
+    home, _, module, _ = external_provider("mcp-authenticated-health")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    with mcp_server(health_auth=True) as (endpoint, requests, *_):
+        configure_home(home, endpoint)
+        assert asyncio.run(mcp.Connection(home, module).request("tools/list", None)).tools
+        assert [r[0] for r in requests[:3]] == ["/health", "/health", "/api/v1/system/status"]
+        assert "Authorization" not in requests[0][1]
+        assert requests[1][1]["Authorization"] == "Bearer key-alice"
+        assert "X-OpenViking-Account" not in requests[1][1]
 
 
 @pytest.mark.parametrize(
@@ -415,7 +455,7 @@ def test_setup_checks_mcp_without_changing_saved_connection(external_provider):
         assert not ok and "MCP is unavailable" in message
         assert "test-secret" not in message
         assert (home / "config.yaml").read_bytes() == original
-        assert len(requests) == 1
+        assert len(requests) == 2
 
 
 def test_null_mcp_config_resolves_and_validates_before_setup(external_provider):
@@ -458,7 +498,8 @@ def test_gateway_headers_reach_discovery_and_setup_validation(external_provider,
         assert asyncio.run(connection.request("tools/list", None)).tools
         values, _, _ = connection.resolve()
         assert mcp.validate_connection(module, values) == (True, "")
-        assert all(all(headers.get(k) == v for k, v in extra.items()) for _, headers, _ in requests)
+        assert all(all(headers.get(k) == v for k, v in extra.items()) for path, headers, _ in requests if path != "/health")
+        assert all(k not in requests[0][1] for k in extra)
 
 
 @pytest.mark.parametrize("managed", [False, True])
@@ -505,7 +546,7 @@ def test_discovery_timeout_is_bounded(external_provider, monkeypatch):
         monkeypatch.setattr(connection, "resolve", lambda: (values, entry, True))
         with pytest.raises(TimeoutError):
             asyncio.run(connection.discover(None))
-        assert len(requests) == 1
+        assert len(requests) == 2
 
 
 def test_discovery_deadline_preserves_connection_failure_hint(external_provider, monkeypatch):
@@ -540,7 +581,7 @@ def test_discovery_slow_request_is_still_reported_as_timeout(external_provider, 
         try:
             with pytest.raises(TimeoutError) as caught:
                 asyncio.run(connection.discover(None))
-            assert entered.is_set() and len(requests) == 1
+            assert entered.is_set() and len(requests) == 2
             assert "timed out" in mcp._error_hint(caught.value)
         finally:
             release.set()
@@ -608,12 +649,12 @@ def test_tls_failure_is_actionable_and_not_retried(external_provider, monkeypatc
     assert "certificate paths" in mcp._error_hint(FileNotFoundError("secret path"))
 
 
-def test_root_key_rejection_has_a_safe_credential_hint(external_provider):
+@pytest.mark.parametrize("http_error", [False, True])
+def test_root_key_rejection_has_a_safe_credential_hint(external_provider, http_error):
     _, _, module, _ = external_provider("mcp-root-key-error")
     mcp = importlib.import_module(module.__name__ + ".mcp_tools")
-    rejected = RuntimeError(
-        "ROOT API keys cannot access tenant-scoped data APIs: private account details"
-    )
+    message = "ROOT API keys cannot access tenant-scoped data APIs: private account details"
+    rejected = module._OpenVikingHTTPError(message, 403) if http_error else RuntimeError(message)
     hint = mcp._error_hint(ExceptionGroup("transport failed", [rejected]))
     assert "user or admin OpenViking API key" in hint
     assert "private account details" not in hint
