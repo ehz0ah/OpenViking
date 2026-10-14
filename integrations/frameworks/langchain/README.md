@@ -61,8 +61,10 @@ The package also provides `OpenVikingSessionRecorder`,
 
 ## Import migration
 
-The server distribution no longer provides `openviking.integrations.langchain`.
-Install this standalone package and change imports to `langchain_openviking`:
+Starting with the next server release after v0.5.0, the legacy
+`openviking.integrations.langchain` namespace is removed without a compatibility
+shim. v0.5.0 still provides it. Install the standalone package and import from
+`langchain_openviking` instead; see the [Unreleased migration notes](https://github.com/volcengine/OpenViking/blob/main/docs/en/about/02-changelog.md#unreleased).
 
 ```python
 from langchain_openviking import OpenVikingRetriever

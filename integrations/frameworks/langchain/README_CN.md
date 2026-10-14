@@ -46,7 +46,10 @@ finally:
 
 ## 导入迁移
 
-服务端包不再提供 `openviking.integrations.langchain`。请安装独立包，并将导入改为：
+从 v0.5.0 之后的下一个服务端版本开始，旧的 `openviking.integrations.langchain`
+命名空间将移除，不提供兼容转发模块；v0.5.0 仍保留该路径。
+请安装独立包，并改用 `langchain_openviking` 导入，
+详见[未发布版本的迁移说明](https://github.com/volcengine/OpenViking/blob/main/docs/zh/about/02-changelog.md#未发布)。
 
 ```python
 from langchain_openviking import OpenVikingRetriever

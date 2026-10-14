@@ -12,6 +12,30 @@ SOURCE_ROOT = PACKAGE_ROOT / "src"
 SDK_ROOT = PROJECT_ROOT / "sdk" / "python"
 
 
+def _repository_files(root: Path) -> list[Path]:
+    names = subprocess.check_output(
+        [
+            "git",
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            str(root.relative_to(PROJECT_ROOT)),
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+    ).split("\0")
+    return [
+        PROJECT_ROOT / name
+        for name in names
+        if name
+        and "__pycache__" not in Path(name).parts
+        and ((PROJECT_ROOT / name).exists() or (PROJECT_ROOT / name).is_symlink())
+    ]
+
+
 def test_server_distribution_does_not_depend_on_standalone_integration():
     root_pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     root_lock = (PROJECT_ROOT / "uv.lock").read_text(encoding="utf-8")
@@ -21,8 +45,8 @@ def test_server_distribution_does_not_depend_on_standalone_integration():
 
 
 def test_server_source_excludes_removed_framework_namespace():
-    source_files = sorted((PROJECT_ROOT / "openviking" / "integrations").rglob("*.py"))
-    assert not source_files, f"Remove legacy framework sources: {source_files}"
+    stale_files = sorted(_repository_files(PROJECT_ROOT / "openviking" / "integrations"))
+    assert not stale_files, f"Remove legacy framework files: {stale_files}"
 
 
 def test_framework_sources_and_tests_use_package_locations():
@@ -31,7 +55,7 @@ def test_framework_sources_and_tests_use_package_locations():
         PROJECT_ROOT / "examples" / "agent-framework",
         *(PROJECT_ROOT / "examples").glob("langchain*"),
     ]
-    stale_files = [path for root in retired_roots for path in root.rglob("*.py")]
+    stale_files = [path for root in retired_roots for path in _repository_files(root)]
     stale_files.extend(
         path
         for path in (PROJECT_ROOT / "tests" / "unit").glob("test_langchain_*.py")
