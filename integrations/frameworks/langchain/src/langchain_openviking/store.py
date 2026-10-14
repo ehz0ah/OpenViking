@@ -166,20 +166,15 @@ class OpenVikingStore(BaseStore):
         *,
         ttl: Any = None,
     ) -> None:
+        from langgraph.store.base import _validate_namespace
+
         if ttl is not None:
             raise NotImplementedError(
                 "TTL is not supported by OpenVikingStore. "
                 "OpenViking stores LangGraph values as durable content records."
             )
-        if value is None:
-            # LangGraph's BaseStore.put defines None as a deletion signal. The
-            # batch / async paths already routed None to delete(); the sync
-            # override must do the same so put(None) is idempotent on a
-            # missing key and removes an existing item instead of persisting
-            # a null-valued record.
-            self.delete(namespace, key)
-            return
         namespace = tuple(namespace)
+        _validate_namespace(namespace)
         if value is None:
             self.delete(namespace, key)
             return

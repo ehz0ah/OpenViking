@@ -23,7 +23,7 @@ from langchain_core.messages import (
     convert_to_openai_messages,
 )
 from langchain_core.runnables import RunnableLambda
-from langgraph.store.base import PutOp
+from langgraph.store.base import InvalidNamespaceError, PutOp
 from openviking_sdk.errors import (
     InvalidArgumentError,
     NotFoundError,
@@ -1614,7 +1614,11 @@ def test_chat_message_history_clear_raises_when_delete_fails():
     assert len(client.sessions["clear-session"]) == 1
 
 
-def test_langgraph_store_round_trip_and_semantic_search():
+@pytest.mark.parametrize(
+    "invalid_namespace",
+    [(), ("users", "", "ada"), ("users", 1), ("users", "ada.profile"), ("langgraph", "ada")],
+)
+def test_langgraph_store_round_trip_and_semantic_search(invalid_namespace):
     client = InMemoryOpenVikingClient()
     store = OpenVikingStore(client=client)
 
@@ -1644,6 +1648,12 @@ def test_langgraph_store_round_trip_and_semantic_search():
     assert semantic[0].value["color"] == "azure"
 
     assert store.list_namespaces(prefix=("users",)) == [("users", "ada")]
+
+    records = dict(client.records)
+    for value in ({"color": "invalid"}, None):
+        with pytest.raises(InvalidNamespaceError):
+            store.put(invalid_namespace, "preferences", value)
+        assert client.records == records
 
     # A None value is a deletion in LangGraph's BaseStore contract.
     store.put(("users", "ada"), "profile", None)
