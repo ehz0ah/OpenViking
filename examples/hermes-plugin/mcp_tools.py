@@ -13,7 +13,7 @@ import os
 import ssl
 import sys
 from builtins import BaseExceptionGroup
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 SERVER_NAME = "openviking"
 _ENV_KEYS = tuple(
@@ -144,6 +144,44 @@ def configure(config: dict, hermes_home: str) -> None:
     # this child. Leave enough time for discovery to wait for that startup.
     entry.setdefault("connect_timeout", 60)
     servers[SERVER_NAME] = entry
+
+
+def repair_profile_home(hermes_home: str | Path) -> str | None:
+    """Repair a copied adapter path, without changing policy or a running child."""
+    from hermes_cli.config import _CONFIG_LOCK, read_user_config_raw, save_config
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    home = Path(hermes_home).resolve()
+    token = set_hermes_home_override(home)
+    try:
+        # Share Hermes's reentrant write lock so concurrent provider instances
+        # cannot both repair (and announce) the same profile in this process.
+        with _CONFIG_LOCK:
+            config = read_user_config_raw()
+            servers = config.get("mcp_servers")
+            entry = servers.get(SERVER_NAME) if isinstance(servers, dict) else None
+            if not isinstance(entry, dict) or "url" in entry or not entry.get("command"):
+                return None
+            if entry.get("args") != ["openviking", "mcp"]:
+                return None  # a manually configured server, not our adapter
+            env = entry.get("env")
+            previous = env.get("HERMES_HOME") if isinstance(env, dict) else None
+            if not isinstance(previous, str) or not (
+                PurePosixPath(previous).is_absolute() or PureWindowsPath(previous).is_absolute()
+            ):
+                return None
+            if Path(previous).is_absolute() and Path(previous).resolve() == home:
+                return None
+            # Merge only this leaf. Raw ${VAR} references, trust, filters and
+            # unrelated settings must survive without expanding secrets.
+            save_config({"mcp_servers": {SERVER_NAME: {"env": {"HERMES_HOME": str(home)}}}},
+                        merge_existing=True)
+            saved = read_user_config_raw()
+            if saved.get("mcp_servers", {}).get(SERVER_NAME, {}).get("env", {}).get("HERMES_HOME") != str(home):
+                raise PermissionError("MCP profile home was not saved")
+            return previous
+    finally:
+        reset_hermes_home_override(token)
 
 
 def _provider_module():

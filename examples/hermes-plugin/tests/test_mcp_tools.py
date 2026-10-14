@@ -759,3 +759,137 @@ def test_configured_but_disabled_mcp_needs_no_migration_notice(external_provider
     config_path.write_text(json.dumps(config))
     assert provider.get_tool_schemas() == []
     assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("relocation", ["clone", "import"])
+@pytest.mark.parametrize("callback", [False, True])
+def test_relocated_profile_repairs_only_adapter_home_and_warns_once(
+    external_provider, monkeypatch, capsys, relocation, callback
+):
+    import shutil
+
+    from hermes_cli.config import read_user_config_raw
+    from hermes_constants import (
+        get_hermes_home,
+        reset_hermes_home_override,
+        set_hermes_home_override,
+    )
+
+    source, _, source_module, _ = external_provider("source")
+    mcp = importlib.import_module(source_module.__name__ + ".mcp_tools")
+    config = {
+        "memory": {"provider": "openviking", "openviking": {"use_ovcli_config": False}},
+        "mcp_servers": {"openviking": {
+            "trust": "full", "enabled": False,
+            "tools": {"include": ["read"], "exclude": ["forget"]},
+            "headers": {"X-Gateway": "${GATEWAY_SECRET}"},
+            "env": {"SSL_CERT_FILE": "${PRIVATE_CA}"},
+        }, "other": {"command": "other-server"}},
+        "model": {"default": "unchanged", "api_key": "${MODEL_SECRET}"},
+    }
+    mcp.configure(config, str(source))
+    (source / "config.yaml").write_text(json.dumps(config))
+    destination = source.parent / relocation
+    shutil.copytree(source, destination)
+    if relocation == "import":
+        shutil.rmtree(source)
+    home, provider, module, _ = external_provider(relocation)
+    monkeypatch.setattr(module, "_classify_runtime_openviking_health", lambda *_: ("healthy", ""))
+    notices = []
+    kwargs = {"warning_callback": notices.append} if callback else {}
+    # Simulate a routed destination while the caller remains bound to another home.
+    token = set_hermes_home_override(source)
+    try:
+        provider.initialize("relocated", hermes_home=str(home), platform="cli", agent_context="cron", **kwargs)
+        repaired = read_user_config_raw(home / "config.yaml")
+        expected = copy.deepcopy(config)
+        expected["mcp_servers"]["openviking"]["env"]["HERMES_HOME"] = str(home.resolve())
+        assert repaired == expected
+        before = (home / "config.yaml").read_bytes()
+        provider.initialize("relocated-again", hermes_home=str(home), platform="cli", agent_context="cron", **kwargs)
+        assert (home / "config.yaml").read_bytes() == before
+        assert get_hermes_home() == source
+    finally:
+        reset_hermes_home_override(token)
+    output = capsys.readouterr()
+    messages = notices if callback else output.err.splitlines()
+    assert len(messages) == 1
+    assert str(source) in messages[0]
+    assert "/reload-mcp" in messages[0] and "before using" in messages[0]
+    assert output.out == ""
+    if callback:
+        assert output.err == ""
+
+
+@pytest.mark.parametrize("entry", [
+    None,
+    {"url": "https://example.test/mcp", "env": {"HERMES_HOME": "/old/profile"}},
+    {"command": "other", "args": ["serve"], "env": {"HERMES_HOME": "/old/profile"}},
+    {"command": "hermes", "args": ["openviking", "mcp"], "env": {}},
+    {"command": "hermes", "args": ["openviking", "mcp"], "env": {"HERMES_HOME": "${HERMES_HOME}"}},
+])
+def test_profile_repair_leaves_other_mcp_config_unchanged(external_provider, entry):
+    home, _, module, _ = external_provider("mcp-repair-noop")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    config = {"mcp_servers": {"openviking": entry}}
+    (home / "config.yaml").write_text(json.dumps(config))
+    before = (home / "config.yaml").read_bytes()
+    assert mcp.repair_profile_home(home) is None
+    assert (home / "config.yaml").read_bytes() == before
+
+
+def test_matching_profile_home_is_not_rewritten(external_provider):
+    home, _, module, _ = external_provider("mcp-repair-matching")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    config = {}
+    mcp.configure(config, str(home))
+    (home / "config.yaml").write_text(json.dumps(config))
+    before = (home / "config.yaml").read_bytes()
+    assert mcp.repair_profile_home(home) is None
+    assert (home / "config.yaml").read_bytes() == before
+
+
+@pytest.mark.parametrize("silent", [False, True])
+def test_failed_profile_repair_warns_once_without_stopping_memory(
+    external_provider, monkeypatch, capsys, silent
+):
+    home, provider, module, _ = external_provider("mcp-repair-failure")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    config = {}
+    mcp.configure(config, str(home.parent / "old"))
+    (home / "config.yaml").write_text(json.dumps(config))
+    before = (home / "config.yaml").read_bytes()
+    from hermes_cli import config as host_config
+
+    def refuse(*_args, **_kwargs):
+        if not silent:
+            raise PermissionError("private diagnostic")
+
+    monkeypatch.setattr(host_config, "save_config", refuse)
+    monkeypatch.setattr(module, "_classify_runtime_openviking_health", lambda *_: ("healthy", ""))
+    for i in range(2):
+        provider.initialize(str(i), hermes_home=str(home), platform="cli", agent_context="cron")
+        assert provider._client is not None
+    assert (home / "config.yaml").read_bytes() == before
+    output = capsys.readouterr()
+    assert output.err.count("could not repair") == 1
+    assert "before using" in output.err and "hermes memory setup openviking" in output.err
+    assert "private diagnostic" not in output.err
+
+
+@pytest.mark.parametrize("previous", [
+    r"C:\Users\source\.hermes\profiles\work",
+    r"\\old-host\share\profiles\work",
+    "/old-machine/.hermes/profiles/work",
+])
+def test_profile_repair_recognizes_foreign_absolute_paths(external_provider, previous):
+    from hermes_cli.config import read_user_config_raw
+
+    home, _, module, _ = external_provider("mcp-cross-platform-import")
+    mcp = importlib.import_module(module.__name__ + ".mcp_tools")
+    config = {}
+    mcp.configure(config, str(home))
+    config["mcp_servers"]["openviking"]["env"]["HERMES_HOME"] = previous
+    (home / "config.yaml").write_text(json.dumps(config))
+    assert mcp.repair_profile_home(home) == previous
+    assert read_user_config_raw(home / "config.yaml")["mcp_servers"]["openviking"]["env"]["HERMES_HOME"] == str(home.resolve())

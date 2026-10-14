@@ -1320,6 +1320,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         self._turn_peer: ContextVar[Optional[str]] = ContextVar("openviking_turn_peer", default=None)
         self._session_id, self._turn_count, self._hermes_home = "", 0, ""
         self._hermes_home_bound = False
+        self._mcp_home_repair_warned = False
         # (conn snapshot, user): keyed on the snapshot so every client built from it
         # shares the resolved user and a /reload invalidates it.
         # Server-asserted user space for explicit-uid URIs (#91995). Key the cache on the connection
@@ -1599,6 +1600,28 @@ class OpenVikingMemoryProvider(MemoryProvider):
         requested_home = str(kwargs.get("hermes_home") or "").strip()
         self._hermes_home = requested_home or str(get_hermes_home())
         self._hermes_home_bound = bool(requested_home)
+        from .mcp_tools import repair_profile_home
+
+        repair_message = ""
+        try:
+            previous_home = repair_profile_home(self._hermes_home)
+            if previous_home:
+                repair_message = (
+                    f"OpenViking tools were configured for {previous_home!r}. The saved path was repaired. "
+                    "A running MCP connection may still use that profile. "
+                    "Run /reload-mcp or restart Hermes before using OpenViking tools."
+                )
+        except Exception as exc:
+            logger.debug("OpenViking MCP profile repair failed (%s)", type(exc).__name__)
+            repair_message = (
+                "OpenViking could not repair the MCP profile path. "
+                "Run hermes memory setup openviking and restart Hermes before using OpenViking tools."
+            )
+        if repair_message and not self._mcp_home_repair_warned:
+            self._mcp_home_repair_warned = True
+            _emit_runtime(repair_message, warning_callback)
+            if not warning_callback:
+                print(repair_message, file=sys.stderr)
         connection_error = ""
         config, env = self._profile_config_and_env()
         try:

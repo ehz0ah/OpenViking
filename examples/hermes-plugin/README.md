@@ -188,6 +188,13 @@ When upgrading from the old `viking_*` tools, run `hermes memory setup openvikin
 once and restart Hermes or the gateway. For local files, follow the upload
 instructions returned by `add_resource` or `add_skill`.
 
+After cloning or importing a profile, the memory provider repairs a copied MCP
+profile path and shows a warning once. Run `/reload-mcp` or restart Hermes before
+using OpenViking tools. An MCP connection started before the repair can still use
+the source profile's credentials until it restarts. Automatic memory uses the
+current profile. The repair requires the OpenViking memory provider to load.
+For a gateway, check its startup log and restart the gateway before using tools.
+
 ## Remove
 
 Close Hermes sessions and stop the gateway for this profile. For Quick Local,
