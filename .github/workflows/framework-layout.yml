@@ -5,7 +5,8 @@ on:
     paths:
       - 'integrations/frameworks/**'
       - 'openviking/integrations/**'
-      - 'examples/langchain*/**'
+      - 'examples/langchain/**'
+      - 'examples/langchain-langgraph/**'
       - 'examples/agent-framework/**'
       - 'tests/unit/test_langchain_*.py'
       - 'tests/integration/langchain_langgraph/**'
@@ -15,7 +16,8 @@ on:
     paths:
       - 'integrations/frameworks/**'
       - 'openviking/integrations/**'
-      - 'examples/langchain*/**'
+      - 'examples/langchain/**'
+      - 'examples/langchain-langgraph/**'
       - 'examples/agent-framework/**'
       - 'tests/unit/test_langchain_*.py'
       - 'tests/integration/langchain_langgraph/**'
@@ -26,6 +28,7 @@ permissions:
 
 jobs:
   layout:
+    name: Framework package locations
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6

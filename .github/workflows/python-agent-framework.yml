@@ -5,14 +5,12 @@ on:
     paths:
       - 'integrations/frameworks/microsoft-agent-framework/**'
       - 'examples/agent-framework/**'
-      - 'tests/unit/test_langchain_package_boundary.py'
       - '.github/workflows/python-agent-framework.yml'
   push:
     branches: [main]
     paths:
       - 'integrations/frameworks/microsoft-agent-framework/**'
       - 'examples/agent-framework/**'
-      - 'tests/unit/test_langchain_package_boundary.py'
       - '.github/workflows/python-agent-framework.yml'
 
 permissions:
@@ -38,11 +36,6 @@ jobs:
           python-version: '3.12'
       - name: Install supported dependencies
         run: python -m pip install '.[test,dev]' '${{ matrix.maf }}' '${{ matrix.sdk }}'
-      - name: Check framework package locations
-        run: >-
-          python -m pytest -q --noconftest -o addopts=''
-          ../../../tests/unit/test_langchain_package_boundary.py
-          -k 'server_source_excludes_removed_framework_namespace or framework_sources_and_tests_use_package_locations'
       - name: Check package and offline contracts
         run: |
           ruff check .

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from langchain_openviking._uri import classify_uri
+
 
 @pytest.mark.parametrize(
     ("uri", "expected_parts", "expected_scope", "expected_content_index"),
@@ -75,9 +77,6 @@ def test_private_uri_classification_preserves_server_namespace_shapes(
     expected_scope,
     expected_content_index,
 ):
-    pytest.importorskip("langchain_openviking")
-    from langchain_openviking._uri import classify_uri
-
     classification = classify_uri(uri)
 
     assert classification.parts == expected_parts

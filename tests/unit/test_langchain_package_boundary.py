@@ -13,26 +13,40 @@ SDK_ROOT = PROJECT_ROOT / "sdk" / "python"
 
 
 def _repository_files(root: Path) -> list[Path]:
-    names = subprocess.check_output(
-        [
-            "git",
-            "ls-files",
-            "-z",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "--",
-            str(root.relative_to(PROJECT_ROOT)),
-        ],
-        cwd=PROJECT_ROOT,
-        text=True,
-    ).split("\0")
+    try:
+        git_root = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=PROJECT_ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        if Path(git_root).resolve() == PROJECT_ROOT.resolve():
+            names = subprocess.check_output(
+                [
+                    "git",
+                    "ls-files",
+                    "-z",
+                    "--cached",
+                    "--others",
+                    "--exclude-standard",
+                    "--",
+                    str(root.relative_to(PROJECT_ROOT)),
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).split("\0")
+            candidates = [PROJECT_ROOT / name for name in names if name]
+        else:
+            candidates = list(root.rglob("*"))
+    except (OSError, subprocess.CalledProcessError):
+        # Source archives have no Git metadata; still check their package layout.
+        candidates = list(root.rglob("*"))
     return [
-        PROJECT_ROOT / name
-        for name in names
-        if name
-        and "__pycache__" not in Path(name).parts
-        and ((PROJECT_ROOT / name).exists() or (PROJECT_ROOT / name).is_symlink())
+        path
+        for path in candidates
+        if "__pycache__" not in path.relative_to(PROJECT_ROOT).parts
+        and (path.is_file() or path.is_symlink())
     ]
 
 
@@ -45,15 +59,19 @@ def test_server_distribution_does_not_depend_on_standalone_integration():
 
 
 def test_server_source_excludes_removed_framework_namespace():
-    stale_files = sorted(_repository_files(PROJECT_ROOT / "openviking" / "integrations"))
-    assert not stale_files, f"Remove legacy framework files: {stale_files}"
+    stale_paths = sorted(
+        str(path.relative_to(PROJECT_ROOT))
+        for path in _repository_files(PROJECT_ROOT / "openviking" / "integrations")
+    )
+    assert not stale_paths, "Remove legacy framework files: " + ", ".join(stale_paths)
 
 
 def test_framework_sources_and_tests_use_package_locations():
     retired_roots = [
         PROJECT_ROOT / "tests" / "integration" / "langchain_langgraph",
         PROJECT_ROOT / "examples" / "agent-framework",
-        *(PROJECT_ROOT / "examples").glob("langchain*"),
+        PROJECT_ROOT / "examples" / "langchain",
+        PROJECT_ROOT / "examples" / "langchain-langgraph",
     ]
     stale_files = [path for root in retired_roots for path in _repository_files(root)]
     stale_files.extend(
