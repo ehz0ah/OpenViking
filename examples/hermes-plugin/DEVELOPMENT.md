@@ -129,6 +129,13 @@ When updating the host SHA in `.github/workflows/hermes-plugin-tests.yml`, check
 the host dependency pins and run the suite before submitting the change.
 These regression tests use mock responses and local test servers; live-service
 validation remains part of release testing.
+The reviewed current host builds its test environment through Hermes PM.
+Fixtures use the host's YAML implementation, so they do not need a separate
+PyYAML install on current Hermes. The older release retains its uv installer.
+Native edit tests select the action advertised by the host tool schema:
+`patch` on current Hermes and `replace` on the release baseline. Both must
+update the same mapped file. Patch-specific tests also check that text outside
+the edited span is preserved in the native entry and its remote copy.
 
 CI also runs `scripts/check-hermes-plugin-install.py` through the real Hermes
 CLI in an isolated profile. It installs this repository's plugin subdirectory,
