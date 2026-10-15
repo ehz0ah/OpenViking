@@ -31,8 +31,8 @@ DEPLOYMENT = "quick_local"
 EMBEDDING_MODEL = "bge-small-zh-v1.5-f16"
 EMBEDDING_DIMENSION = 512
 # Accept new releases in the server API series; resolve only in explicit setup.
-OPENVIKING_REQUIREMENT = "openviking[local-embed]>=0.4.22,<0.5"
-# Later LiteLLM releases exclude Python 3.14. OpenViking supports this version.
+OPENVIKING_REQUIREMENT = "openviking[local-embed]>=0.5.0,<0.6"
+# Some LiteLLM releases in OpenViking's supported range exclude Python 3.14.
 # This restriction applies only to the private server, never Hermes's dependencies.
 
 _OPENVIKING_REQUIREMENT = Requirement(OPENVIKING_REQUIREMENT)
