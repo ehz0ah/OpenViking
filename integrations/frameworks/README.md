@@ -52,10 +52,14 @@ MCP can expose model-callable OpenViking tools alongside the lifecycle adapter.
 
 ## Add an adapter
 
+Refer to the [LangChain/LangGraph adapter](langchain/) and
+[Microsoft Agent Framework provider](microsoft-agent-framework/) for examples of
+connecting a framework's lifecycle to the OpenViking SDK. Each package includes
+its implementation, contract tests, and runnable examples.
+
 Create one package under `integrations/frameworks/<framework>/` containing its
-manifest, `src/`, `tests/`, README, and runnable `examples/`. Use the two existing
-adapters as references for the OpenViking contract and inspect the target
-framework's current public APIs before choosing its hooks.
+manifest, `src/`, `tests/`, README, and runnable `examples/`. Use the target
+framework's public lifecycle and message APIs to implement the following contracts.
 
 - **Identity and state:** use the application's authenticated OV client and keep
   a stable mapping from framework conversations to OV sessions. Preserve delivery
@@ -87,24 +91,9 @@ minimum and current dependency versions. Verify remote SDK usage does not import
 the OV server. A documented live smoke should demonstrate capture, extraction,
 and recall in a new conversation when credentials and a server are available.
 
-### Coding-agent prompt
-
-> Implement an OpenViking adapter for **[framework and supported versions]** using
-> the official **[Python/TypeScript] SDK**. Inspect the framework's current public
-> lifecycle and message APIs first. Follow this guide and the MAF/LangChain
-> implementations for identity, recall, completed-message capture, and extraction
-> policy. Adapt their hooks and state to this framework. Preserve tool evidence;
-> exclude injected recall, system instructions, and hidden reasoning. Test full
-> and interrupted streams, tool loops, restored sessions, partial writes, and lost
-> acknowledgements. Provide a focused package, README, runnable example, and
-> offline contract tests. Keep runtime dependencies local to the adapter package.
-
-This prompt is a development aid. Review generated code and pass the contract
-tests before listing the framework as supported.
-
-## Future candidates
+## Other frameworks
 
 Google ADK, OpenAI Agents SDK, Vercel AI SDK, CrewAI, LlamaIndex, Mastra, Pydantic AI,
-AutoGen/AG2, Strands, and Agno are candidates for additional adapters. Their adapters
-are not implemented here. Start with the SDK-based recipe above and add each
-integration when its lifecycle, message mapping, and tests are verified.
+AutoGen/AG2, Strands, and Agno do not have adapters in this directory. Refer to
+[Add an adapter](#add-an-adapter) and the SDK operations above for implementation
+and validation guidance.
