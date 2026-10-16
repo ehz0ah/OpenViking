@@ -51,9 +51,9 @@ jobs:
           enable-cache: true
           cache-dependency-glob: |
             .ci/hermes-agent/uv.lock
-            examples/hermes-plugin/pyproject.toml
+            .ci/hermes-agent/pm/lock.json
 
-      - name: Install the host and plugin test dependencies
+      - name: Build the reviewed host test environment
         working-directory: .ci/hermes-agent
         run: |
           python -m pm.build_env --source . --out .venv --group dev --group test
@@ -120,13 +120,12 @@ jobs:
           enable-cache: true
           cache-dependency-glob: |
             .ci/hermes-agent/uv.lock
-            examples/hermes-plugin/local_packages.py
+            .ci/hermes-agent/pm/lock.json
       - name: Install the reviewed host and test dependencies
         run: |
           if [ '${{ matrix.host }}' = release ]; then
-            uv sync --frozen --extra dev --no-install-project
-            PYTHON=$(uv run --no-sync python -c 'import sys; print(sys.executable)')
-            uv pip install --python "$PYTHON" PyYAML==6.0.3
+            uv sync --python '${{ matrix.python }}' --frozen --extra dev --no-install-project
+            uv pip install --python .venv/bin/python PyYAML==6.0.3
           else
             python -m pm.build_env --source . --out .venv --group dev --group test
           fi

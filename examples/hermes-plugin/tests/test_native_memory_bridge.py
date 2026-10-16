@@ -116,7 +116,7 @@ def test_native_exact_entry_does_not_mutate_its_longer_sibling(
 
 def test_committed_batch_mirrors_each_intermediate_entry_in_order(external_provider):
     with _bridge(external_provider) as (home, _, client, store, invoke):
-        # Current Hermes rejects a batch that empties the entire native store.
+        # An unrelated native entry must survive the mirrored batch unchanged.
         assert invoke({"action": "add", "content": "Keep this entry"}, mirror=False)["success"]
         assert invoke(
             {"action": "add", "content": "Prefers tea"},
@@ -161,7 +161,12 @@ def test_uncommitted_batch_has_no_remote_effect(external_provider, monkeypatch, 
             with pytest.raises(OSError, match="disk unavailable"):
                 invoke(*operations, batch=True)
         else:
-            assert not invoke(*operations, batch=True)["success"]
+            result = invoke(*operations, batch=True)
+            assert not result["success"]
+            expected_error = (
+                "no entry matched 'absent entry'" if failure == "missing_entry" else "chars"
+            )
+            assert expected_error in result["error"].lower()
         assert client.requests == []
         assert not getattr(provider, "_native_memory_mirror", None)
         assert not (home / "openviking/memory_mirror_registry.json").exists()
@@ -197,9 +202,7 @@ def test_index_failure_preserves_mapping_for_next_replace_and_remove(
         uri = next(iter(client.files))
         client.refresh_failure = failed_status
         with caplog.at_level("WARNING", logger="plugins.memory.openviking"):
-            assert invoke(_edit("Prefers tea", "Prefers coffee"))[
-                "success"
-            ]
+            assert invoke(_edit("Prefers tea", "Prefers coffee"))["success"]
         path = home / "openviking/memory_mirror_registry.json"
         entry = json.loads(path.read_text())["entries"][0]
         assert entry["uri"] == uri
@@ -211,9 +214,7 @@ def test_index_failure_preserves_mapping_for_next_replace_and_remove(
             for record in caplog.records
         )
         client.refresh_failure = None
-        assert invoke(_edit("Prefers coffee", "Prefers water"))[
-            "success"
-        ]
+        assert invoke(_edit("Prefers coffee", "Prefers water"))["success"]
         assert client.files == {uri: "Prefers water"}
         assert invoke({"action": "remove", "old_text": "water"})["success"]
         assert client.files == {}
@@ -231,7 +232,9 @@ def test_native_patch_mirrors_the_complete_updated_entry(external_provider, batc
         assert invoke(_edit("tea", "coffee"), batch=batch)["success"]
         assert store.user_entries == ["Prefers coffee with milk"]
         assert client.files == {uri: "Prefers coffee with milk"}
-        entries = json.loads((home / "openviking/memory_mirror_registry.json").read_text())["entries"]
+        entries = json.loads((home / "openviking/memory_mirror_registry.json").read_text())[
+            "entries"
+        ]
         assert len(entries) == 1
         assert entries[0]["content"] == "Prefers coffee with milk"
         assert entries[0]["uri"] == uri

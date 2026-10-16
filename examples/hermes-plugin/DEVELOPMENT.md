@@ -122,9 +122,10 @@ The `Hermes Plugin Tests` workflow runs this directory's complete external-provi
 suite on plugin changes, pushes to `main`/`develop`, and manual dispatch.
 It uses Python 3.14 and a reviewed Hermes commit, with test retries disabled.
 The release-host job runs the complete provider suite on Hermes v2026.9.24
-with Python 3.13. Legacy autostart uses Hermes's profile environment helper and
-credential scrubber on both hosts. Unrelated process and profile secrets are
-removed; missing helpers or secret-scope errors prevent spawning.
+with Python 3.13, selected explicitly by `uv sync --python` rather than the
+release checkout's `.python-version`. Legacy autostart uses Hermes's profile
+environment helper and credential scrubber on both hosts. Unrelated process and
+profile secrets are removed; missing helpers or secret-scope errors prevent spawning.
 When updating the host SHA in `.github/workflows/hermes-plugin-tests.yml`, check
 the host dependency pins and run the suite before submitting the change.
 These regression tests use mock responses and local test servers; live-service
@@ -150,7 +151,9 @@ The complete mirror tests require the committed-entry event contract introduced
 in [Hermes PR #118903](https://github.com/NousResearch/hermes-agent/pull/118903)
 and merged through [#120003](https://github.com/NousResearch/hermes-agent/pull/120003)
 (commit `5908e1aaa83e82aaf12541d7a9d90762d0b46a64`):
-`MemoryManager` forwards `previous_content` for each successful replace/remove.
+`MemoryManager` forwards `previous_content` for each successful replacement or
+removal. Current native `patch` calls become provider `replace` events containing
+the complete updated entry; older native `replace` calls use that event directly.
 The legacy compatibility tests verify that missing metadata skips these remote
 mutations. Do not substitute a guessed match in tests or production.
 
