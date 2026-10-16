@@ -103,9 +103,9 @@ def check(host, repository, root, timeout, *, install_only=False):
             "plugin.yaml",
             "pyproject.toml",
         ):
-            if (installed / name).read_bytes() != (
+            if (installed / name).read_text(encoding="utf-8") != (
                 repository / "examples/hermes-plugin" / name
-            ).read_bytes():
+            ).read_text(encoding="utf-8"):
                 raise RuntimeError("Installed plugin differs from the checked-out source: " + name)
         if install_only:
             evidence = {
