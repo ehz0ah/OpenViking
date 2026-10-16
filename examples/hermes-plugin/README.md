@@ -147,9 +147,10 @@ choose Quick Local. Setup selects the latest compatible OpenViking 0.5 release
 and restarts the server if needed. Normal chat and recovery use the installed
 server without checking for updates.
 
-If validation fails after installing a runtime update, the existing server stays
-running. Correct the reported problem and run setup again. The pending restart
-is kept until the updated server is ready.
+If validation fails after installing a runtime update, chat continues to use the
+healthy existing server. Correct the reported problem and run setup again.
+Setup keeps the update pending and requests a restart only after validation
+passes.
 
 ## Existing users
 

@@ -116,6 +116,11 @@ requirements are recorded per profile; unchanged requirements reuse the runtime,
 while a new release follows the existing validation and restart path. Chat and
 recovery do not resolve or upgrade packages.
 
+Installation records a runtime-validation-pending marker that only setup consumes.
+After validation passes, setup uses the existing server controller to request a
+restart and clears the validation marker. Chat therefore keeps using a healthy
+existing server while an installed update is still unvalidated.
+
 ## Validation
 
 The `Hermes Plugin Tests` workflow runs this directory's complete external-provider

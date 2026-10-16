@@ -980,7 +980,8 @@ def test_current_installer_uses_pm_and_private_root(tmp_path, monkeypatch):
         explicit=True,
         timeout=1800,
     )
-    assert paths.restart_required_marker.is_file()
+    assert paths.runtime_validation_pending_marker.is_file()
+    assert not paths.restart_required_marker.exists()
 
 
 def test_pm_failure_does_not_activate_profile(tmp_path, monkeypatch):

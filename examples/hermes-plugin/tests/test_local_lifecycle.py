@@ -182,7 +182,7 @@ def test_restart_keeps_data_and_changes_only_owned_process(servers):
 def test_runtime_upgrade_retries_restart_after_failed_setup(
     servers, modules, monkeypatch, failure_stage
 ):
-    _home, _provider, _module, ql, _lifecycle, packages = modules
+    _home, provider, _module, ql, _lifecycle, packages = modules
     server = servers("upgrade-retry")
     ready(server)
     home = server.paths.root.parent
@@ -219,8 +219,20 @@ def test_runtime_upgrade_retries_restart_after_failed_setup(
     assert server.status()["pid"] == old_pid
     assert all(path.read_bytes() == value for path, value in saved.items())
     assert (server.paths.root / "runtime-requirements.json").is_file()
-    assert server.paths.restart_required_marker.is_file()
-    validate.side_effect = None
+    provider._profile_config_and_env = lambda: ({"deployment": ql.DEPLOYMENT}, {})
+    provider.initialize("after-failed-setup", hermes_home=str(home), platform="cli")
+    assert server.status()["pid"] == old_pid
+    assert provider._ensure_client() is not None
+    assert server.paths.runtime_validation_pending_marker.is_file()
+    assert not server.paths.restart_required_marker.exists()
+
+    def validate_pending_runtime(**_kwargs):
+        assert server.paths.runtime_validation_pending_marker.is_file()
+        assert not server.paths.restart_required_marker.exists()
+        assert provider._ensure_client() is not None
+        assert server.status()["pid"] == old_pid
+
+    validate.side_effect = validate_pending_runtime
     validate.reset_mock()
     progress = []
     retry = ql.QuickLocalSetup(health_check=lambda _url: (True, ""), progress=progress.append)
@@ -231,6 +243,7 @@ def test_runtime_upgrade_retries_restart_after_failed_setup(
     new_pid = server.status()["pid"]
     assert new_pid != old_pid
     assert not server.paths.restart_required_marker.exists()
+    assert not server.paths.runtime_validation_pending_marker.exists()
     assert all(path.read_bytes() == value for path, value in saved.items())
     assert data.read_text() == "keep"
     retry.provision(hermes_home=home)
