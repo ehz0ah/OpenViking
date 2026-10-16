@@ -89,7 +89,7 @@ def test_bad_hash_never_reaches_pm(external_provider, tmp_path, wheel_source, mo
         lambda **_kw: [ql.OPENVIKING_REQUIREMENT, f"probe @ {url}#sha256={'0' * 64}"],
     )
     monkeypatch.setattr(
-        packages, "resolve_server_requirement", lambda **_kw: "openviking[local-embed]==0.4.23"
+        packages, "resolve_server_requirement", lambda **_kw: "openviking[local-embed]==0.5.0"
     )
     install = MagicMock()
     monkeypatch.setattr(pm, "ensure_python_tool", install)

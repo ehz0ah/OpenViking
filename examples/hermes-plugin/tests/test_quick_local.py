@@ -980,6 +980,7 @@ def test_current_installer_uses_pm_and_private_root(tmp_path, monkeypatch):
         explicit=True,
         timeout=1800,
     )
+    assert paths.restart_required_marker.is_file()
 
 
 def test_pm_failure_does_not_activate_profile(tmp_path, monkeypatch):
@@ -1023,8 +1024,11 @@ def test_setup_checks_new_release_even_with_a_compatible_installed_runtime(tmp_p
     paths = quick_local.managed_paths(tmp_path)
     paths.root.mkdir()
     requirements = packages.install_requirements()
-    requirements[0] = "openviking[local-embed]==0.4.22"
+    requirements[0] = "openviking[local-embed]==0.5.0"
     (paths.root / "runtime-requirements.json").write_text(json.dumps(requirements))
+    monkeypatch.setattr(
+        packages, "resolve_server_requirement", lambda **_kw: "openviking[local-embed]==0.5.1"
+    )
     monkeypatch.setattr(quick_local, "openviking_install_satisfies_requirement", lambda _p: True)
     monkeypatch.setattr(packages, "verified_requirements", lambda values, _cache: values)
     install = MagicMock()
@@ -1032,9 +1036,9 @@ def test_setup_checks_new_release_even_with_a_compatible_installed_runtime(tmp_p
 
     engine = quick_local.QuickLocalSetup(health_check=lambda _url: (False, ""))
     assert engine._ensure_openviking_installed(paths) is True
-    assert install.call_args.args[1][0] == "openviking[local-embed]==0.5.0"
+    assert install.call_args.args[1][0] == "openviking[local-embed]==0.5.1"
     assert json.loads((paths.root / "runtime-requirements.json").read_text())[0] == (
-        "openviking[local-embed]==0.5.0"
+        "openviking[local-embed]==0.5.1"
     )
 
 

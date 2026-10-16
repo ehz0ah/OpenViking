@@ -398,11 +398,12 @@ class QuickLocalSetup:
                 )
             server_config = build_server_config(preflight.paths, vlm, port=port)
             config_changed = not _stored_server_config_matches(preflight.paths, server_config)
-            if (
+            restart_required = (
                 runtime_changed
                 or config_changed
                 or preflight.paths.restart_required_marker.is_file()
-            ):
+            )
+            if restart_required:
                 # Validate in disposable storage before changing the live service.
                 validation_port = find_available_port()
                 if validation_port is None:
@@ -425,7 +426,7 @@ class QuickLocalSetup:
             self._emit(
                 QuickLocalStage.COMPLETE,
                 "Quick Local is ready with the updated settings."
-                if runtime_changed or config_changed
+                if restart_required
                 else "Existing Quick Local server is reachable; reusing it.",
             )
             return QuickLocalSetupResult(
@@ -524,6 +525,8 @@ class QuickLocalSetup:
             raise QuickLocalSetupError(
                 "Could not install a compatible OpenViking local embedding runtime."
             )
+        # Keep a pending restart if validation fails before the live config changes.
+        _mark_server_restart_required(paths)
         atomic_json_write(receipt, requirements, mode=0o600)
         return True
 
