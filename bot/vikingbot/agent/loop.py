@@ -406,6 +406,7 @@ class AgentLoop:
 
         self._running = False
         self._mcp_servers = mcp_servers or {}
+        self._mcp_pending_servers = dict(self._mcp_servers)
         self._mcp_stack: AsyncExitStack | None = None
         self._mcp_connected = False
         self._mcp_connect_lock = asyncio.Lock()
@@ -417,26 +418,28 @@ class AgentLoop:
 
         Ported from HKUDS/nanobot v0.1.5.
         """
-        if self._mcp_connected or not self._mcp_servers:
+        if self._mcp_connected or not self._mcp_pending_servers:
             return
         async with self._mcp_connect_lock:
-            if self._mcp_connected:
+            if self._mcp_connected or not self._mcp_pending_servers:
                 return
             try:
                 from vikingbot.agent.tools.mcp import connect_mcp_servers
 
-                self._mcp_stack = AsyncExitStack()
-                await self._mcp_stack.__aenter__()
-                await connect_mcp_servers(self._mcp_servers, self.tools, self._mcp_stack)
-                self._mcp_connected = True
+                if self._mcp_stack is None:
+                    self._mcp_stack = AsyncExitStack()
+                    await self._mcp_stack.__aenter__()
+                failed_servers = await connect_mcp_servers(
+                    self._mcp_pending_servers, self.tools, self._mcp_stack
+                )
+                self._mcp_pending_servers = {
+                    name: config
+                    for name, config in self._mcp_pending_servers.items()
+                    if name in failed_servers
+                }
+                self._mcp_connected = not self._mcp_pending_servers
             except Exception as e:
                 logger.error(f"Failed to connect MCP servers (will retry next message): {e}")
-                if self._mcp_stack:
-                    try:
-                        await self._mcp_stack.aclose()
-                    except Exception:
-                        pass
-                    self._mcp_stack = None
 
     async def close_mcp(self) -> None:
         """Close MCP server connections. Ported from HKUDS/nanobot v0.1.5."""
@@ -446,6 +449,7 @@ class AgentLoop:
             except Exception:
                 pass  # MCP SDK cancel scope cleanup is noisy but harmless
             self._mcp_stack = None
+        self._mcp_pending_servers = dict(self._mcp_servers)
         self._mcp_connected = False
 
     async def _publish_auto_memory_context(
