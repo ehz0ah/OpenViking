@@ -134,6 +134,15 @@ def openviking_message_to_langchain(message: dict[str, Any]) -> list[BaseMessage
         has_output = part.get("tool_output") is not None
         is_completed_result = has_output or status in {"completed", "error"}
         if is_completed_result:
+            if tool_id and part.get("tool_input"):
+                # A completed part that also records its input carries the call itself.
+                tool_calls.append(
+                    {
+                        "id": tool_id,
+                        "name": tool_name,
+                        "args": _tool_args(part.get("tool_input")),
+                    }
+                )
             tool_messages.append(
                 ToolMessage(
                     content=str(part.get("tool_output") or ""),
@@ -170,6 +179,21 @@ def restore_openviking_messages(messages: Sequence[dict[str, Any]]) -> list[Base
     for message in messages:
         for langchain_message in openviking_message_to_langchain(message):
             if isinstance(langchain_message, AIMessage):
+                if any(
+                    str(tc.get("id") or "") in active_tool_call_ids
+                    for tc in langchain_message.tool_calls or []
+                ):
+                    # Drop calls whose pending call was already restored.
+                    kept = [
+                        tc
+                        for tc in langchain_message.tool_calls
+                        if str(tc.get("id") or "") not in active_tool_call_ids
+                    ]
+                    if not kept and not langchain_message.content:
+                        continue
+                    langchain_message = AIMessage(
+                        content=langchain_message.content, tool_calls=kept
+                    )
                 restored.append(langchain_message)
                 for tool_call in langchain_message.tool_calls or []:
                     tool_call_id = str(tool_call.get("id") or "")

@@ -871,6 +871,70 @@ def test_openviking_tool_result_restores_without_duplicate_ai_tool_call():
     assert restored[0].tool_call_id == "call-1"
 
 
+def test_history_restores_completed_tool_part_with_input():
+    client = InMemoryOpenVikingClient()
+    client.add_message(
+        "combined-tool",
+        "assistant",
+        parts=[
+            {
+                "type": "tool",
+                "tool_id": "release-2",
+                "tool_name": "read_notes",
+                "tool_input": {"release": "stable"},
+                "tool_output": "Released on Friday.",
+                "tool_status": "completed",
+            }
+        ],
+    )
+    history = OpenVikingChatMessageHistory(session_id="combined-tool", client=client)
+
+    ai, tool = history.messages
+
+    assert isinstance(ai, AIMessage)
+    assert ai.tool_calls[0]["id"] == "release-2"
+    assert ai.tool_calls[0]["args"] == {"release": "stable"}
+    assert isinstance(tool, ToolMessage)
+    assert tool.content == "Released on Friday."
+
+
+def test_history_does_not_duplicate_pending_call_for_completed_tool_part():
+    client = InMemoryOpenVikingClient()
+    client.add_message(
+        "split-tool",
+        "assistant",
+        parts=[
+            {
+                "type": "tool",
+                "tool_id": "c1",
+                "tool_name": "read_notes",
+                "tool_input": {"a": 1},
+                "tool_status": "pending",
+            }
+        ],
+    )
+    client.add_message(
+        "split-tool",
+        "assistant",
+        parts=[
+            {
+                "type": "tool",
+                "tool_id": "c1",
+                "tool_name": "read_notes",
+                "tool_input": {"a": 1},
+                "tool_output": "ok",
+                "tool_status": "completed",
+            }
+        ],
+    )
+    history = OpenVikingChatMessageHistory(session_id="split-tool", client=client)
+
+    messages = history.messages
+
+    assert [type(m) for m in messages] == [AIMessage, ToolMessage]
+    assert len(messages[0].tool_calls) == 1
+
+
 def test_empty_human_message_uses_empty_text_part():
     payloads = langchain_message_to_openviking(HumanMessage(content=""))
 
