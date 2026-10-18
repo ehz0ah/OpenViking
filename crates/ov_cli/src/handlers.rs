@@ -1538,6 +1538,7 @@ pub async fn handle_find(
     context_type: Option<Vec<String>>,
     tags: Option<Vec<String>>,
     read_content: bool,
+    include_provenance: bool,
     events_time_decay_protection: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
@@ -1573,6 +1574,9 @@ pub async fn handle_find(
     if read_content {
         params.push("--read-content".to_string());
     }
+    if include_provenance {
+        params.push("--include-provenance".to_string());
+    }
     if let Some(ref protection) = events_time_decay_protection {
         params.push(format!("--events-time-decay-protection {}", protection));
     }
@@ -1593,6 +1597,7 @@ pub async fn handle_find(
         context_type,
         tags,
         read_content,
+        include_provenance,
         events_time_decay_protection,
         ctx.output_format,
         ctx.compact,
@@ -1615,6 +1620,7 @@ pub async fn handle_search(
     context_type: Option<Vec<String>>,
     tags: Option<Vec<String>>,
     read_content: bool,
+    include_provenance: bool,
     events_time_decay_protection: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
@@ -1629,7 +1635,7 @@ pub async fn handle_search(
             "--image is not supported with --search-type keywords.".to_string(),
         ));
     }
-    validate_search_mode_options(&mode, &uri, read_content)?;
+    validate_search_mode_options(&mode, &uri, read_content, include_provenance)?;
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
     if search_type != "semantic" {
         params.push(format!("--search-type {}", search_type));
@@ -1665,6 +1671,9 @@ pub async fn handle_search(
     if read_content {
         params.push("--read-content".to_string());
     }
+    if include_provenance {
+        params.push("--include-provenance".to_string());
+    }
     if let Some(ref protection) = events_time_decay_protection {
         params.push(format!("--events-time-decay-protection {}", protection));
     }
@@ -1688,6 +1697,7 @@ pub async fn handle_search(
         context_type,
         tags,
         read_content,
+        include_provenance,
         events_time_decay_protection,
         ctx.output_format,
         ctx.compact,
@@ -1695,7 +1705,12 @@ pub async fn handle_search(
     .await
 }
 
-fn validate_search_mode_options(mode: &str, uri: &str, read_content: bool) -> Result<()> {
+fn validate_search_mode_options(
+    mode: &str,
+    uri: &str,
+    read_content: bool,
+    include_provenance: bool,
+) -> Result<()> {
     if mode == "context" {
         if !uri.is_empty() {
             return Err(Error::Client(
@@ -1706,6 +1721,12 @@ fn validate_search_mode_options(mode: &str, uri: &str, read_content: bool) -> Re
         if read_content {
             return Err(Error::Client(
                 "--read-content is not supported with --mode context; context assembly already includes content. Remove --read-content or use --mode list."
+                    .to_string(),
+            ));
+        }
+        if include_provenance {
+            return Err(Error::Client(
+                "--include-provenance is not supported with --mode context. Remove --include-provenance or use --mode list."
                     .to_string(),
             ));
         }
@@ -2287,5 +2308,21 @@ mod add_resource_validation_tests {
         assert!(super::validate_watch_source(false, 0.0).is_ok());
         assert!(super::validate_watch_source(false, -1.0).is_ok());
         assert!(super::validate_watch_source(true, 1.0).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod search_mode_validation_tests {
+    #[test]
+    fn provenance_is_limited_to_list_mode() {
+        assert!(super::validate_search_mode_options("list", "", false, true).is_ok());
+
+        let error = super::validate_search_mode_options("context", "", false, true)
+            .expect_err("context mode should reject provenance");
+        assert!(
+            error
+                .to_string()
+                .contains("--include-provenance is not supported with --mode context")
+        );
     }
 }
