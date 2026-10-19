@@ -147,10 +147,13 @@ choose Quick Local. Setup selects the latest compatible OpenViking 0.5 release
 and restarts the server if needed. Normal chat and recovery use the installed
 server without checking for updates.
 
-If validation fails after installing a runtime update, chat continues to use the
-healthy existing server. Correct the reported problem and run setup again.
-Setup keeps the update pending and requests a restart only after validation
-passes.
+If validation fails after installing a runtime update, chat keeps using the healthy
+existing server while it keeps running. If that process stops, recovery can start
+the installed runtime before setup validation has passed. The update still needs
+validation, even if the server is ready. `hermes openviking local status` reports
+this pending state. Correct the reported problem and run
+`hermes memory setup openviking` again, then choose Quick Local. Setup validates
+the update before requesting a restart.
 
 ## Existing users
 

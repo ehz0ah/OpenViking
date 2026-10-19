@@ -180,13 +180,18 @@ def test_restart_keeps_data_and_changes_only_owned_process(servers):
 
 @pytest.mark.parametrize("failure_stage", ["validation", "port"])
 def test_runtime_upgrade_retries_restart_after_failed_setup(
-    servers, modules, monkeypatch, failure_stage
+    servers, modules, monkeypatch, capsys, failure_stage
 ):
+    from argparse import Namespace
+
     _home, provider, _module, ql, _lifecycle, packages = modules
     server = servers("upgrade-retry")
     ready(server)
     home = server.paths.root.parent
+    cli = importlib.import_module(ql.__package__ + ".cli")
+    monkeypatch.setattr(cli, "get_hermes_home", lambda: home)
     old_pid = server.status()["pid"]
+    assert server.status()["runtime_validation_pending"] is False
     endpoint = server.status()["endpoint"]
     saved = {
         path: path.read_bytes() for path in (server.paths.server_config, server.paths.ovcli_config)
@@ -216,6 +221,18 @@ def test_runtime_upgrade_retries_restart_after_failed_setup(
         with pytest.raises(ql.QuickLocalSetupError, match=error):
             setup.provision(hermes_home=home)
 
+    status = server.status()
+    assert status["pid"] == old_pid
+    assert status["state"] == "ready"
+    assert status["runtime_validation_pending"] is True
+    assert status["restart_required"] is False
+    cli._run(Namespace(local_action="status"))
+    output = capsys.readouterr().out
+    assert "Quick Local: ready" in output
+    assert "Runtime update needs validation" in output
+    assert "hermes memory setup openviking" in output
+    assert "choose Quick Local" in output
+    assert "hermes openviking local restart" not in output
     assert server.status()["pid"] == old_pid
     assert all(path.read_bytes() == value for path, value in saved.items())
     assert (server.paths.root / "runtime-requirements.json").is_file()
@@ -244,6 +261,11 @@ def test_runtime_upgrade_retries_restart_after_failed_setup(
     assert new_pid != old_pid
     assert not server.paths.restart_required_marker.exists()
     assert not server.paths.runtime_validation_pending_marker.exists()
+    assert server.status()["runtime_validation_pending"] is False
+    cli._run(Namespace(local_action="status"))
+    output = capsys.readouterr().out
+    assert "Quick Local: ready" in output
+    assert "Runtime update needs validation" not in output
     assert all(path.read_bytes() == value for path, value in saved.items())
     assert data.read_text() == "keep"
     retry.provision(hermes_home=home)

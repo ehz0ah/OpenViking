@@ -119,7 +119,9 @@ recovery do not resolve or upgrade packages.
 Installation records a runtime-validation-pending marker that only setup consumes.
 After validation passes, setup uses the existing server controller to request a
 restart and clears the validation marker. Chat therefore keeps using a healthy
-existing server while an installed update is still unvalidated.
+existing server while it keeps running. If that process stops, recovery can start
+the installed runtime without clearing pending validation. Local status reports
+`runtime_validation_pending` separately from readiness and `restart_required`.
 
 ## Validation
 
