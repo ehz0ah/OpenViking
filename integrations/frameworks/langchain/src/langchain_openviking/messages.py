@@ -196,6 +196,10 @@ def restore_openviking_messages(messages: Sequence[dict[str, Any]]) -> list[Base
                     restored.append(langchain_message)
                     active_tool_call_ids.discard(tool_call_id)
             else:
+                if isinstance(langchain_message, HumanMessage):
+                    # Providers may reuse call IDs in a later user turn.
+                    active_tool_call_ids.clear()
+                    seen_tool_call_ids.clear()
                 restored.append(langchain_message)
     return restored
 

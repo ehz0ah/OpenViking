@@ -796,41 +796,62 @@ def test_in_memory_openviking_client_batch_add_messages_records_messages():
     assert client.sessions["batch-session"][1]["created_at"] == "2026-05-26T00:00:00+00:00"
 
 
-def test_chat_message_history_preserves_tool_parts():
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("second_query", ["deployment", "Tokyo"])
+async def test_chat_message_history_preserves_tool_parts(asynchronous, second_query):
     client = InMemoryOpenVikingClient()
-    history = OpenVikingChatMessageHistory(session_id="history-session", client=client)
-
-    history.add_messages(
-        [
-            HumanMessage(content="Find deployment notes."),
-            AIMessage(
-                content="Searching.",
-                tool_calls=[
-                    {
-                        "id": "call-1",
-                        "name": "viking_find",
-                        "args": {"query": "deployment"},
-                    }
-                ],
-            ),
-            ToolMessage(
-                content="Azure deployment notes found.",
-                tool_call_id="call-1",
-                name="viking_find",
-            ),
-        ]
+    history = OpenVikingChatMessageHistory(
+        session_id="history-session", client=client, async_client=client
     )
+
+    messages = []
+    for query in ("deployment", second_query):
+        messages.extend(
+            [
+                HumanMessage(content=f"Find {query} notes."),
+                AIMessage(
+                    content="Searching.",
+                    tool_calls=[
+                        {
+                            "id": "call-1",
+                            "name": "viking_find",
+                            "args": {"query": query},
+                        }
+                    ],
+                ),
+                ToolMessage(
+                    content=f"{query} notes found.",
+                    tool_call_id="call-1",
+                    name="viking_find",
+                ),
+            ]
+        )
+    try:
+        if asynchronous:
+            await history.aadd_messages(messages)
+            restored = await history.aget_messages()
+        else:
+            history.add_messages(messages)
+            restored = history.messages
+    finally:
+        await history.aclose()
 
     stored = client.sessions["history-session"]
     assert stored[1]["parts"][1]["type"] == "tool"
-    assert stored[2]["parts"][0]["tool_output"] == "Azure deployment notes found."
+    assert stored[2]["parts"][0]["tool_output"] == "deployment notes found."
 
-    restored = history.messages
+    assert [type(message) for message in restored] == [HumanMessage, AIMessage, ToolMessage] * 2
     restored_ai_messages = [message for message in restored if isinstance(message, AIMessage)]
     restored_tool_messages = [message for message in restored if isinstance(message, ToolMessage)]
-    assert len(restored_ai_messages) == 1
-    assert len(restored_ai_messages[0].tool_calls) == 1
-    assert len(restored_tool_messages) == 1
+    assert [message.tool_calls for message in restored_ai_messages] == [
+        [{"id": "call-1", "name": "viking_find", "args": {"query": query}, "type": "tool_call"}]
+        for query in ("deployment", second_query)
+    ]
+    assert [message.tool_call_id for message in restored_tool_messages] == ["call-1", "call-1"]
+    assert [message.content for message in restored_tool_messages] == [
+        f"{query} notes found." for query in ("deployment", second_query)
+    ]
 
 
 def test_chat_message_history_writes_peer_id_to_messages():
@@ -888,11 +909,11 @@ def test_openviking_tool_result_restores_without_duplicate_ai_tool_call(fields):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("repeated", [False, True])
+@pytest.mark.parametrize("followup", ["none", "duplicate", "next_turn"])
 @pytest.mark.parametrize("tool_input", [{"release": "stable"}, {}])
 @pytest.mark.parametrize("status,output", [("completed", "Friday"), ("error", "")])
 async def test_history_restores_completed_tool_part_with_input(
-    asynchronous, repeated, tool_input, status, output
+    asynchronous, followup, tool_input, status, output
 ):
     client = InMemoryOpenVikingClient()
     client.add_message(
@@ -909,7 +930,9 @@ async def test_history_restores_completed_tool_part_with_input(
             }
         ],
     )
-    if repeated:
+    if followup != "none":
+        if followup == "next_turn":
+            client.add_message("combined-tool", "user", content="Run the same tool again.")
         client.add_message(
             "combined-tool",
             "assistant",
@@ -920,10 +943,16 @@ async def test_history_restores_completed_tool_part_with_input(
     )
     stored = deepcopy(client.sessions["combined-tool"])
     try:
-        ai, tool = await history.aget_messages() if asynchronous else history.messages
+        messages = await history.aget_messages() if asynchronous else history.messages
     finally:
         await history.aclose()
 
+    assert [type(message) for message in messages] == (
+        [AIMessage, ToolMessage, HumanMessage, AIMessage, ToolMessage]
+        if followup == "next_turn"
+        else [AIMessage, ToolMessage]
+    )
+    ai, tool = messages[-2:]
     assert isinstance(ai, AIMessage)
     assert ai.tool_calls[0]["id"] == "release-2"
     assert ai.tool_calls[0]["name"] == "read_notes"
