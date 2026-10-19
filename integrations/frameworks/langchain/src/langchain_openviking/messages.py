@@ -12,7 +12,6 @@ try:
     from langchain_core.messages import (
         AIMessage,
         BaseMessage,
-        ChatMessage,
         HumanMessage,
         SystemMessage,
         ToolMessage,
@@ -22,7 +21,7 @@ except ImportError as exc:  # pragma: no cover - exercised by optional import pa
 
     raise missing_dependency("langchain", "langchain-core") from exc
 
-from langchain_openviking.client import extract_message_text
+from langchain_openviking.client import extract_message_text, get_message_role
 
 OPENVIKING_CONTEXT_MARKER = "<openviking_context>"
 LANGCHAIN_SUMMARIZATION_SOURCE = "summarization"
@@ -97,20 +96,14 @@ def langchain_message_to_openviking(
             }
         ]
 
-    if isinstance(message, SystemMessage) or (
-        isinstance(message, ChatMessage) and message.role == "system"
-    ):
+    role = get_message_role(message)
+    if role == "system":
         return []
 
     text = extract_message_text(getattr(message, "content", ""))
     if not text:
         return []
-    role = (
-        "user"
-        if getattr(message, "type", "") == "human"
-        or (isinstance(message, ChatMessage) and message.role == "user")
-        else "assistant"
-    )
+    role = "user" if role == "user" else "assistant"
     return [{"role": role, "parts": [{"type": "text", "text": text}]}]
 
 
@@ -172,36 +165,31 @@ def restore_openviking_messages(messages: Sequence[dict[str, Any]]) -> list[Base
 
     restored: list[BaseMessage] = []
     active_tool_call_ids: set[str] = set()
+    seen_tool_call_ids: set[str] = set()
     for message in messages:
         converted = openviking_message_to_langchain(message)
+        # Complete earlier calls before any new assistant text or calls.
+        for result in converted:
+            if isinstance(result, ToolMessage) and result.tool_call_id in active_tool_call_ids:
+                restored.append(result)
+                active_tool_call_ids.discard(result.tool_call_id)
         for langchain_message in converted:
             if isinstance(langchain_message, AIMessage):
-                if any(
-                    str(tc.get("id") or "") in active_tool_call_ids
-                    for tc in langchain_message.tool_calls or []
-                ):
-                    # Drop calls whose pending call was already restored.
-                    kept = [
-                        tc
-                        for tc in langchain_message.tool_calls
-                        if str(tc.get("id") or "") not in active_tool_call_ids
-                    ]
+                kept = [
+                    call
+                    for call in langchain_message.tool_calls
+                    if str(call.get("id") or "") not in seen_tool_call_ids
+                ]
+                if len(kept) != len(langchain_message.tool_calls):
                     if not kept and not langchain_message.content:
                         continue
-                    # Finish earlier calls before emitting another assistant turn.
-                    for result in converted[1:]:
-                        if (
-                            isinstance(result, ToolMessage)
-                            and result.tool_call_id in active_tool_call_ids
-                        ):
-                            restored.append(result)
-                            active_tool_call_ids.discard(result.tool_call_id)
                     langchain_message = langchain_message.model_copy(update={"tool_calls": kept})
                 restored.append(langchain_message)
                 for tool_call in langchain_message.tool_calls or []:
                     tool_call_id = str(tool_call.get("id") or "")
                     if tool_call_id:
                         active_tool_call_ids.add(tool_call_id)
+                        seen_tool_call_ids.add(tool_call_id)
             elif isinstance(langchain_message, ToolMessage):
                 tool_call_id = str(langchain_message.tool_call_id or "")
                 if tool_call_id and tool_call_id in active_tool_call_ids:

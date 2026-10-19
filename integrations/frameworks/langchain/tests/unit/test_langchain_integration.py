@@ -14,8 +14,11 @@ pytest.importorskip("langchain_openviking")
 from langchain_core.messages import (
     AIMessage,
     ChatMessage,
+    ChatMessageChunk,
     HumanMessage,
+    HumanMessageChunk,
     SystemMessage,
+    SystemMessageChunk,
     ToolMessage,
     convert_to_openai_messages,
 )
@@ -885,10 +888,11 @@ def test_openviking_tool_result_restores_without_duplicate_ai_tool_call(fields):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("repeated", [False, True])
 @pytest.mark.parametrize("tool_input", [{"release": "stable"}, {}])
 @pytest.mark.parametrize("status,output", [("completed", "Friday"), ("error", "")])
 async def test_history_restores_completed_tool_part_with_input(
-    asynchronous, tool_input, status, output
+    asynchronous, repeated, tool_input, status, output
 ):
     client = InMemoryOpenVikingClient()
     client.add_message(
@@ -905,6 +909,12 @@ async def test_history_restores_completed_tool_part_with_input(
             }
         ],
     )
+    if repeated:
+        client.add_message(
+            "combined-tool",
+            "assistant",
+            parts=deepcopy(client.sessions["combined-tool"][0]["parts"]),
+        )
     history = OpenVikingChatMessageHistory(
         session_id="combined-tool", client=client, async_client=client
     )
@@ -928,7 +938,7 @@ async def test_history_restores_completed_tool_part_with_input(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("tool_input", [{"a": 1}, {}])
-@pytest.mark.parametrize("layout", ["split", "coalesced", "mixed"])
+@pytest.mark.parametrize("layout", ["split", "coalesced", "mixed", "result_only"])
 async def test_history_does_not_duplicate_pending_call_for_completed_tool_part(
     asynchronous, tool_input, layout
 ):
@@ -941,14 +951,15 @@ async def test_history_does_not_duplicate_pending_call_for_completed_tool_part(
         "tool_status": "pending",
     }
     completed = {**pending, "tool_status": "completed", "tool_output": "ok"}
+    if layout == "result_only":
+        completed.pop("tool_input")
     if layout != "coalesced":
         client.add_message("split-tool", "assistant", parts=[pending])
     parts = [pending, completed] if layout == "coalesced" else [completed]
+    if layout in ("mixed", "result_only"):
+        parts.append({"type": "text", "text": "Lookup complete."})
     if layout == "mixed":
-        parts += [
-            {"type": "text", "text": "Lookup complete."},
-            {**completed, "tool_id": "c2"},
-        ]
+        parts.append({**completed, "tool_id": "c2"})
     client.add_message("split-tool", "assistant", parts=parts)
     history = OpenVikingChatMessageHistory(
         session_id="split-tool", client=client, async_client=client
@@ -959,14 +970,19 @@ async def test_history_does_not_duplicate_pending_call_for_completed_tool_part(
     finally:
         await history.aclose()
     expected_types = [AIMessage, ToolMessage] * (2 if layout == "mixed" else 1)
+    if layout == "result_only":
+        expected_types.append(AIMessage)
     assert [type(message) for message in messages] == expected_types
-    assert [call["id"] for message in messages[::2] for call in message.tool_calls] == (
+    assert [
+        call["id"]
+        for message in messages
+        if isinstance(message, AIMessage)
+        for call in message.tool_calls
+    ] == (["c1", "c2"] if layout == "mixed" else ["c1"])
+    assert [message.tool_call_id for message in messages if isinstance(message, ToolMessage)] == (
         ["c1", "c2"] if layout == "mixed" else ["c1"]
     )
-    assert [message.tool_call_id for message in messages[1::2]] == (
-        ["c1", "c2"] if layout == "mixed" else ["c1"]
-    )
-    if layout == "mixed":
+    if layout in ("mixed", "result_only"):
         assert messages[2].content == "Lookup complete."
     assert client.sessions["split-tool"] == stored
 
@@ -988,12 +1004,20 @@ def test_system_messages_are_never_persisted_to_openviking_history():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("entry", ["history", "ahistory", "recorder", "arecorder"])
+@pytest.mark.parametrize("message_type", [ChatMessage, ChatMessageChunk])
 @pytest.mark.parametrize(
-    "role,expected", [("user", "user"), ("system", None), ("assistant", "assistant")]
+    "role,expected",
+    [
+        ("user", "user"),
+        ("human", "user"),
+        ("system", None),
+        ("developer", None),
+        ("assistant", "assistant"),
+    ],
 )
-async def test_generic_chat_message_roles_in_session_history(entry, role, expected):
+async def test_generic_chat_message_roles_in_session_history(entry, message_type, role, expected):
     client = InMemoryOpenVikingClient()
-    message = ChatMessage(role=role, content="Role-specific conversation text.")
+    message = message_type(role=role, content="Role-specific conversation text.")
     history = OpenVikingChatMessageHistory("chat-roles", client=client, async_client=client)
     recorder = OpenVikingSessionRecorder(client=client, async_client=client)
     try:
@@ -1021,10 +1045,18 @@ async def test_generic_chat_message_roles_in_session_history(entry, role, expect
     "message,expected",
     [
         (ChatMessage(role="user", content="Current question."), "Current question."),
+        (ChatMessage(role="human", content="Current question."), "Current question."),
+        (ChatMessageChunk(role="human", content="Current question."), "Current question."),
+        ({"type": "chat", "role": "human", "content": "Current question."}, "Current question."),
         ({"type": "chat", "role": "user", "content": "Current question."}, "Current question."),
         (ChatMessage(role="system", content="Runtime policy."), "Earlier question."),
+        (ChatMessage(role="developer", content="Runtime policy."), "Earlier question."),
+        (ChatMessageChunk(role="developer", content="Runtime policy."), "Earlier question."),
+        ({"type": "chat", "role": "developer", "content": "Runtime policy."}, "Earlier question."),
         (ChatMessage(role="critic", content="Critique."), "Earlier question."),
         (HumanMessage(content="Current question.", role="system"), "Current question."),
+        (HumanMessageChunk(content="Current question.", role="system"), "Current question."),
+        (SystemMessageChunk(content="Runtime policy.", role="user"), "Earlier question."),
         (ChatMessage(role="user", content=""), "Earlier question."),
     ],
 )
