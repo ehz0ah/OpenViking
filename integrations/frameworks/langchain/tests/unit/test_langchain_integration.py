@@ -798,18 +798,21 @@ def test_in_memory_openviking_client_batch_add_messages_records_messages():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("second_query", ["deployment", "Tokyo"])
-async def test_chat_message_history_preserves_tool_parts(asynchronous, second_query):
+@pytest.mark.parametrize(
+    "second_query,new_turn", [("deployment", True), ("Tokyo", True), ("Tokyo", False)]
+)
+async def test_chat_message_history_preserves_tool_parts(asynchronous, second_query, new_turn):
     client = InMemoryOpenVikingClient()
     history = OpenVikingChatMessageHistory(
         session_id="history-session", client=client, async_client=client
     )
 
     messages = []
-    for query in ("deployment", second_query):
+    for index, query in enumerate(("deployment", second_query)):
+        if index == 0 or new_turn:
+            messages.append(HumanMessage(content=f"Find {query} notes."))
         messages.extend(
             [
-                HumanMessage(content=f"Find {query} notes."),
                 AIMessage(
                     content="Searching.",
                     tool_calls=[
@@ -841,7 +844,11 @@ async def test_chat_message_history_preserves_tool_parts(asynchronous, second_qu
     assert stored[1]["parts"][1]["type"] == "tool"
     assert stored[2]["parts"][0]["tool_output"] == "deployment notes found."
 
-    assert [type(message) for message in restored] == [HumanMessage, AIMessage, ToolMessage] * 2
+    assert [type(message) for message in restored] == (
+        [HumanMessage, AIMessage, ToolMessage]
+        + ([HumanMessage] if new_turn else [])
+        + [AIMessage, ToolMessage]
+    )
     restored_ai_messages = [message for message in restored if isinstance(message, AIMessage)]
     restored_tool_messages = [message for message in restored if isinstance(message, ToolMessage)]
     assert [message.tool_calls for message in restored_ai_messages] == [
@@ -909,35 +916,39 @@ def test_openviking_tool_result_restores_without_duplicate_ai_tool_call(fields):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("followup", ["none", "duplicate", "next_turn"])
+@pytest.mark.parametrize("followup", ["none", "duplicate", "next_turn", "approval"])
 @pytest.mark.parametrize("tool_input", [{"release": "stable"}, {}])
 @pytest.mark.parametrize("status,output", [("completed", "Friday"), ("error", "")])
 async def test_history_restores_completed_tool_part_with_input(
     asynchronous, followup, tool_input, status, output
 ):
     client = InMemoryOpenVikingClient()
+    completed = {
+        "type": "tool",
+        "tool_id": "release-2",
+        "tool_name": "read_notes",
+        "tool_input": tool_input,
+        "tool_output": output,
+        "tool_status": status,
+    }
+    initial = deepcopy(completed)
+    if followup == "approval":
+        initial.pop("tool_output")
+        initial["tool_status"] = "pending"
     client.add_message(
         "combined-tool",
         "assistant",
-        parts=[
-            {
-                "type": "tool",
-                "tool_id": "release-2",
-                "tool_name": "read_notes",
-                "tool_input": tool_input,
-                "tool_output": output,
-                "tool_status": status,
-            }
-        ],
+        parts=[initial],
     )
     if followup != "none":
-        if followup == "next_turn":
-            client.add_message("combined-tool", "user", content="Run the same tool again.")
-        client.add_message(
-            "combined-tool",
-            "assistant",
-            parts=deepcopy(client.sessions["combined-tool"][0]["parts"]),
-        )
+        if followup in ("next_turn", "approval"):
+            client.add_message(
+                "combined-tool",
+                "user",
+                content="Approved." if followup == "approval" else "Run the same tool again.",
+            )
+        for _ in range(2 if followup == "approval" else 1):
+            client.add_message("combined-tool", "assistant", parts=deepcopy([completed]))
     history = OpenVikingChatMessageHistory(
         session_id="combined-tool", client=client, async_client=client
     )
@@ -947,12 +958,13 @@ async def test_history_restores_completed_tool_part_with_input(
     finally:
         await history.aclose()
 
-    assert [type(message) for message in messages] == (
-        [AIMessage, ToolMessage, HumanMessage, AIMessage, ToolMessage]
-        if followup == "next_turn"
-        else [AIMessage, ToolMessage]
-    )
-    ai, tool = messages[-2:]
+    expected_types = {
+        "next_turn": [AIMessage, ToolMessage, HumanMessage, AIMessage, ToolMessage],
+        "approval": [AIMessage, HumanMessage, ToolMessage],
+    }.get(followup, [AIMessage, ToolMessage])
+    assert [type(message) for message in messages] == expected_types
+    ai = [message for message in messages if isinstance(message, AIMessage)][-1]
+    tool = messages[-1]
     assert isinstance(ai, AIMessage)
     assert ai.tool_calls[0]["id"] == "release-2"
     assert ai.tool_calls[0]["name"] == "read_notes"
@@ -967,11 +979,16 @@ async def test_history_restores_completed_tool_part_with_input(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("tool_input", [{"a": 1}, {}])
-@pytest.mark.parametrize("layout", ["split", "coalesced", "mixed", "result_only"])
+@pytest.mark.parametrize(
+    "layout", ["split", "coalesced", "mixed", "result_only", "approved_result_only"]
+)
 async def test_history_does_not_duplicate_pending_call_for_completed_tool_part(
     asynchronous, tool_input, layout
 ):
     client = InMemoryOpenVikingClient()
+    approved = layout == "approved_result_only"
+    if approved:
+        layout = "result_only"
     pending = {
         "type": "tool",
         "tool_id": "c1",
@@ -984,6 +1001,8 @@ async def test_history_does_not_duplicate_pending_call_for_completed_tool_part(
         completed.pop("tool_input")
     if layout != "coalesced":
         client.add_message("split-tool", "assistant", parts=[pending])
+    if approved:
+        client.add_message("split-tool", "user", content="Approved.")
     parts = [pending, completed] if layout == "coalesced" else [completed]
     if layout in ("mixed", "result_only"):
         parts.append({"type": "text", "text": "Lookup complete."})
@@ -1001,6 +1020,8 @@ async def test_history_does_not_duplicate_pending_call_for_completed_tool_part(
     expected_types = [AIMessage, ToolMessage] * (2 if layout == "mixed" else 1)
     if layout == "result_only":
         expected_types.append(AIMessage)
+    if approved:
+        expected_types.insert(1, HumanMessage)
     assert [type(message) for message in messages] == expected_types
     assert [
         call["id"]
@@ -1012,8 +1033,61 @@ async def test_history_does_not_duplicate_pending_call_for_completed_tool_part(
         ["c1", "c2"] if layout == "mixed" else ["c1"]
     )
     if layout in ("mixed", "result_only"):
-        assert messages[2].content == "Lookup complete."
+        assert messages[3 if approved else 2].content == "Lookup complete."
     assert client.sessions["split-tool"] == stored
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("earlier_result", ["pending", "combined", "result_only"])
+async def test_history_keeps_new_combined_call_when_an_older_call_reuses_its_id(
+    asynchronous, earlier_result
+):
+    client = InMemoryOpenVikingClient()
+    pending = {
+        "type": "tool",
+        "tool_id": "call_0",
+        "tool_name": "weather",
+        "tool_input": {"city": "Paris"},
+        "tool_status": "pending",
+    }
+    client.add_message("overlapping-id", "assistant", parts=[pending])
+    client.add_message("overlapping-id", "user", content="Check Tokyo instead.")
+    if earlier_result != "pending":
+        result = {**pending, "tool_status": "completed", "tool_output": "18C"}
+        if earlier_result == "result_only":
+            result.pop("tool_input")
+        for _ in range(2):
+            client.add_message("overlapping-id", "assistant", parts=deepcopy([result]))
+    client.add_message(
+        "overlapping-id",
+        "assistant",
+        parts=[
+            {
+                **pending,
+                "tool_input": {"city": "Tokyo"},
+                "tool_status": "completed",
+                "tool_output": "22C",
+            }
+        ],
+    )
+    stored = deepcopy(client.sessions["overlapping-id"])
+    history = OpenVikingChatMessageHistory("overlapping-id", client=client, async_client=client)
+    try:
+        messages = await history.aget_messages() if asynchronous else history.messages
+    finally:
+        await history.aclose()
+    assert [type(message) for message in messages] == (
+        [AIMessage, HumanMessage]
+        + ([] if earlier_result == "pending" else [ToolMessage])
+        + [AIMessage, ToolMessage]
+    )
+    assert messages[0].tool_calls[0]["args"] == {"city": "Paris"}
+    assert messages[-2].tool_calls[0]["args"] == {"city": "Tokyo"}
+    assert [message.content for message in messages if isinstance(message, ToolMessage)] == (
+        ["22C"] if earlier_result == "pending" else ["18C", "22C"]
+    )
+    assert client.sessions["overlapping-id"] == stored
 
 
 def test_empty_human_message_uses_empty_text_part():

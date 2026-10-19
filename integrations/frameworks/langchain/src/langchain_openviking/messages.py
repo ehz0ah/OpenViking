@@ -14,6 +14,7 @@ try:
         BaseMessage,
         HumanMessage,
         SystemMessage,
+        ToolCall,
         ToolMessage,
     )
 except ImportError as exc:  # pragma: no cover - exercised by optional import path
@@ -161,24 +162,34 @@ def openviking_message_to_langchain(message: dict[str, Any]) -> list[BaseMessage
 
 
 def restore_openviking_messages(messages: Sequence[dict[str, Any]]) -> list[BaseMessage]:
-    """Restore a valid LangChain message sequence from OpenViking session messages."""
+    """Restore LangChain history, matching tool results to recorded calls."""
 
     restored: list[BaseMessage] = []
-    active_tool_call_ids: set[str] = set()
-    seen_tool_call_ids: set[str] = set()
+    active_tool_calls: dict[str, ToolCall] = {}
+    seen_tool_calls: dict[str, ToolCall] = {}
     for message in messages:
         converted = openviking_message_to_langchain(message)
+        converted_calls = {
+            str(call.get("id") or ""): call
+            for item in converted
+            if isinstance(item, AIMessage)
+            for call in item.tool_calls
+        }
         # Complete earlier calls before any new assistant text or calls.
         for result in converted:
-            if isinstance(result, ToolMessage) and result.tool_call_id in active_tool_call_ids:
+            if not isinstance(result, ToolMessage):
+                continue
+            pending = active_tool_calls.get(result.tool_call_id)
+            # Different arguments or names describe a new call that reused the ID.
+            if pending is not None and converted_calls.get(result.tool_call_id, pending) == pending:
                 restored.append(result)
-                active_tool_call_ids.discard(result.tool_call_id)
+                seen_tool_calls[result.tool_call_id] = active_tool_calls.pop(result.tool_call_id)
         for langchain_message in converted:
             if isinstance(langchain_message, AIMessage):
                 kept = [
                     call
                     for call in langchain_message.tool_calls
-                    if str(call.get("id") or "") not in seen_tool_call_ids
+                    if call != seen_tool_calls.get(str(call.get("id") or ""))
                 ]
                 if len(kept) != len(langchain_message.tool_calls):
                     if not kept and not langchain_message.content:
@@ -188,18 +199,17 @@ def restore_openviking_messages(messages: Sequence[dict[str, Any]]) -> list[Base
                 for tool_call in langchain_message.tool_calls or []:
                     tool_call_id = str(tool_call.get("id") or "")
                     if tool_call_id:
-                        active_tool_call_ids.add(tool_call_id)
-                        seen_tool_call_ids.add(tool_call_id)
+                        active_tool_calls[tool_call_id] = tool_call
+                        seen_tool_calls[tool_call_id] = tool_call
             elif isinstance(langchain_message, ToolMessage):
                 tool_call_id = str(langchain_message.tool_call_id or "")
-                if tool_call_id and tool_call_id in active_tool_call_ids:
+                if tool_call_id and tool_call_id in active_tool_calls:
                     restored.append(langchain_message)
-                    active_tool_call_ids.discard(tool_call_id)
+                    active_tool_calls.pop(tool_call_id)
             else:
                 if isinstance(langchain_message, HumanMessage):
-                    # Providers may reuse call IDs in a later user turn.
-                    active_tool_call_ids.clear()
-                    seen_tool_call_ids.clear()
+                    # Reset duplicate detection; pending calls may still finish later.
+                    seen_tool_calls.clear()
                 restored.append(langchain_message)
     return restored
 
