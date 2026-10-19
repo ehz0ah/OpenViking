@@ -799,16 +799,29 @@ def test_in_memory_openviking_client_batch_add_messages_records_messages():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize(
-    "second_query,new_turn", [("deployment", True), ("Tokyo", True), ("Tokyo", False)]
+    "second_query,new_turn,second_output",
+    [
+        ("deployment", True, "deployment notes found."),
+        ("Tokyo", True, "Tokyo notes found."),
+        ("Tokyo", False, "Tokyo notes found."),
+        ("deployment", False, "done"),
+        ("deployment", False, "deployment notes found."),
+        ("deployment", False, None),
+    ],
 )
-async def test_chat_message_history_preserves_tool_parts(asynchronous, second_query, new_turn):
+async def test_chat_message_history_preserves_tool_parts(
+    asynchronous, second_query, new_turn, second_output
+):
     client = InMemoryOpenVikingClient()
     history = OpenVikingChatMessageHistory(
         session_id="history-session", client=client, async_client=client
     )
 
     messages = []
-    for index, query in enumerate(("deployment", second_query)):
+    outputs = ["deployment notes found.", second_output]
+    for index, (query, output) in enumerate(
+        zip(("deployment", second_query), outputs, strict=True)
+    ):
         if index == 0 or new_turn:
             messages.append(HumanMessage(content=f"Find {query} notes."))
         messages.extend(
@@ -823,13 +836,10 @@ async def test_chat_message_history_preserves_tool_parts(asynchronous, second_qu
                         }
                     ],
                 ),
-                ToolMessage(
-                    content=f"{query} notes found.",
-                    tool_call_id="call-1",
-                    name="viking_find",
-                ),
             ]
         )
+        if output is not None:
+            messages.append(ToolMessage(content=output, tool_call_id="call-1", name="viking_find"))
     try:
         if asynchronous:
             await history.aadd_messages(messages)
@@ -847,7 +857,8 @@ async def test_chat_message_history_preserves_tool_parts(asynchronous, second_qu
     assert [type(message) for message in restored] == (
         [HumanMessage, AIMessage, ToolMessage]
         + ([HumanMessage] if new_turn else [])
-        + [AIMessage, ToolMessage]
+        + [AIMessage]
+        + ([ToolMessage] if second_output is not None else [])
     )
     restored_ai_messages = [message for message in restored if isinstance(message, AIMessage)]
     restored_tool_messages = [message for message in restored if isinstance(message, ToolMessage)]
@@ -855,10 +866,11 @@ async def test_chat_message_history_preserves_tool_parts(asynchronous, second_qu
         [{"id": "call-1", "name": "viking_find", "args": {"query": query}, "type": "tool_call"}]
         for query in ("deployment", second_query)
     ]
-    assert [message.tool_call_id for message in restored_tool_messages] == ["call-1", "call-1"]
-    assert [message.content for message in restored_tool_messages] == [
-        f"{query} notes found." for query in ("deployment", second_query)
-    ]
+    expected_outputs = [output for output in outputs if output is not None]
+    assert [message.tool_call_id for message in restored_tool_messages] == ["call-1"] * len(
+        expected_outputs
+    )
+    assert [message.content for message in restored_tool_messages] == expected_outputs
 
 
 def test_chat_message_history_writes_peer_id_to_messages():
@@ -916,7 +928,18 @@ def test_openviking_tool_result_restores_without_duplicate_ai_tool_call(fields):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("followup", ["none", "duplicate", "next_turn", "approval"])
+@pytest.mark.parametrize(
+    "followup",
+    [
+        "none",
+        "duplicate",
+        "next_turn",
+        "approval",
+        "updated_output",
+        "updated_status",
+        "coalesced_poll",
+    ],
+)
 @pytest.mark.parametrize("tool_input", [{"release": "stable"}, {}])
 @pytest.mark.parametrize("status,output", [("completed", "Friday"), ("error", "")])
 async def test_history_restores_completed_tool_part_with_input(
@@ -935,10 +958,22 @@ async def test_history_restores_completed_tool_part_with_input(
     if followup == "approval":
         initial.pop("tool_output")
         initial["tool_status"] = "pending"
+    following = deepcopy(completed)
+    if followup == "updated_output":
+        following["tool_output"] = f"{output} updated"
+    elif followup == "updated_status":
+        following["tool_status"] = "error" if status == "completed" else "completed"
+    initial_parts = [initial]
+    following_parts = [following]
+    if followup == "coalesced_poll":
+        pending = {**completed, "tool_status": "pending"}
+        pending.pop("tool_output")
+        initial_parts.insert(0, deepcopy(pending))
+        following_parts.insert(0, deepcopy(pending))
     client.add_message(
         "combined-tool",
         "assistant",
-        parts=[initial],
+        parts=initial_parts,
     )
     if followup != "none":
         if followup in ("next_turn", "approval"):
@@ -948,7 +983,7 @@ async def test_history_restores_completed_tool_part_with_input(
                 content="Approved." if followup == "approval" else "Run the same tool again.",
             )
         for _ in range(2 if followup == "approval" else 1):
-            client.add_message("combined-tool", "assistant", parts=deepcopy([completed]))
+            client.add_message("combined-tool", "assistant", parts=deepcopy(following_parts))
     history = OpenVikingChatMessageHistory(
         session_id="combined-tool", client=client, async_client=client
     )
@@ -961,6 +996,9 @@ async def test_history_restores_completed_tool_part_with_input(
     expected_types = {
         "next_turn": [AIMessage, ToolMessage, HumanMessage, AIMessage, ToolMessage],
         "approval": [AIMessage, HumanMessage, ToolMessage],
+        "updated_output": [AIMessage, ToolMessage, AIMessage, ToolMessage],
+        "updated_status": [AIMessage, ToolMessage, AIMessage, ToolMessage],
+        "coalesced_poll": [AIMessage, ToolMessage, AIMessage, ToolMessage],
     }.get(followup, [AIMessage, ToolMessage])
     assert [type(message) for message in messages] == expected_types
     ai = [message for message in messages if isinstance(message, AIMessage)][-1]
@@ -971,8 +1009,8 @@ async def test_history_restores_completed_tool_part_with_input(
     assert ai.tool_calls[0]["args"] == tool_input
     assert isinstance(tool, ToolMessage)
     assert tool.tool_call_id == "release-2"
-    assert tool.content == output
-    assert tool.status == ("error" if status == "error" else "success")
+    assert tool.content == following["tool_output"]
+    assert tool.status == ("error" if following["tool_status"] == "error" else "success")
     assert client.sessions["combined-tool"] == stored
 
 

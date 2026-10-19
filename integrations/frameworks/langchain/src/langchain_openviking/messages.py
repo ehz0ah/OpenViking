@@ -126,8 +126,7 @@ def openviking_message_to_langchain(message: dict[str, Any]) -> list[BaseMessage
         tool_id = str(part.get("tool_id") or "")
         tool_name = str(part.get("tool_name") or "")
         status = str(part.get("tool_status") or "")
-        has_output = part.get("tool_output") is not None
-        is_completed_result = has_output or status in {"completed", "error"}
+        is_completed_result = _has_tool_result(part)
         if not is_completed_result or (
             tool_id and tool_name and part.get("tool_input") is not None
         ):
@@ -166,31 +165,56 @@ def restore_openviking_messages(messages: Sequence[dict[str, Any]]) -> list[Base
 
     restored: list[BaseMessage] = []
     active_tool_calls: dict[str, ToolCall] = {}
-    seen_tool_calls: dict[str, ToolCall] = {}
+    completed_tool_calls: dict[str, tuple[ToolCall, ToolMessage]] = {}
     for message in messages:
         converted = openviking_message_to_langchain(message)
+        pending_call_ids = {
+            str(part.get("tool_id") or "")
+            for part in message.get("parts") or []
+            if part.get("type") == "tool" and not _has_tool_result(part)
+        }
         converted_calls = {
             str(call.get("id") or ""): call
             for item in converted
             if isinstance(item, AIMessage)
             for call in item.tool_calls
         }
+        converted_results: dict[str, ToolMessage] = {}
+        for item in converted:
+            if isinstance(item, ToolMessage):
+                converted_results.setdefault(item.tool_call_id, item)
+        completed_here: set[str] = set()
         # Complete earlier calls before any new assistant text or calls.
-        for result in converted:
-            if not isinstance(result, ToolMessage):
-                continue
+        for result in converted_results.values():
             pending = active_tool_calls.get(result.tool_call_id)
             # Different arguments or names describe a new call that reused the ID.
             if pending is not None and converted_calls.get(result.tool_call_id, pending) == pending:
                 restored.append(result)
-                seen_tool_calls[result.tool_call_id] = active_tool_calls.pop(result.tool_call_id)
+                completed_tool_calls[result.tool_call_id] = (
+                    active_tool_calls.pop(result.tool_call_id),
+                    result,
+                )
+                completed_here.add(result.tool_call_id)
         for langchain_message in converted:
             if isinstance(langchain_message, AIMessage):
-                kept = [
-                    call
-                    for call in langchain_message.tool_calls
-                    if call != seen_tool_calls.get(str(call.get("id") or ""))
-                ]
+                kept: list[ToolCall] = []
+                for call in langchain_message.tool_calls:
+                    tool_call_id = str(call.get("id") or "")
+                    if tool_call_id in completed_here:
+                        continue
+                    previous = completed_tool_calls.get(tool_call_id)
+                    call_result = converted_results.get(tool_call_id)
+                    # Only a completed pair can be a repeated stored record.
+                    if (
+                        tool_call_id not in pending_call_ids
+                        and call_result is not None
+                        and previous is not None
+                        and previous[0] == call
+                        and previous[1].content == call_result.content
+                        and previous[1].status == call_result.status
+                    ):
+                        continue
+                    kept.append(call)
                 if len(kept) != len(langchain_message.tool_calls):
                     if not kept and not langchain_message.content:
                         continue
@@ -200,18 +224,28 @@ def restore_openviking_messages(messages: Sequence[dict[str, Any]]) -> list[Base
                     tool_call_id = str(tool_call.get("id") or "")
                     if tool_call_id:
                         active_tool_calls[tool_call_id] = tool_call
-                        seen_tool_calls[tool_call_id] = tool_call
+                        completed_tool_calls.pop(tool_call_id, None)
             elif isinstance(langchain_message, ToolMessage):
                 tool_call_id = str(langchain_message.tool_call_id or "")
                 if tool_call_id and tool_call_id in active_tool_calls:
                     restored.append(langchain_message)
-                    active_tool_calls.pop(tool_call_id)
+                    completed_tool_calls[tool_call_id] = (
+                        active_tool_calls.pop(tool_call_id),
+                        langchain_message,
+                    )
             else:
                 if isinstance(langchain_message, HumanMessage):
                     # Reset duplicate detection; pending calls may still finish later.
-                    seen_tool_calls.clear()
+                    completed_tool_calls.clear()
                 restored.append(langchain_message)
     return restored
+
+
+def _has_tool_result(part: dict[str, Any]) -> bool:
+    return part.get("tool_output") is not None or str(part.get("tool_status") or "") in {
+        "completed",
+        "error",
+    }
 
 
 def _text_parts(content: Any) -> list[dict[str, Any]]:
