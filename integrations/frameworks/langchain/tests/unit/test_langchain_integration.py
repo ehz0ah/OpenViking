@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from types import MappingProxyType
 from typing import Any
 
@@ -850,28 +851,45 @@ def test_chat_message_history_writes_peer_id_to_messages():
     ]
 
 
-def test_openviking_tool_result_restores_without_duplicate_ai_tool_call():
-    restored = openviking_message_to_langchain(
-        {
-            "role": "assistant",
-            "parts": [
-                {
-                    "type": "tool",
-                    "tool_id": "call-1",
-                    "tool_name": "viking_find",
-                    "tool_output": "Azure deployment notes found.",
-                    "tool_status": "completed",
-                }
-            ],
-        }
-    )
+@pytest.mark.parametrize(
+    "fields",
+    [{}, {"tool_input": None}, {"tool_input": {"a": 1}, "tool_name": ""}],
+)
+def test_openviking_tool_result_restores_without_duplicate_ai_tool_call(fields):
+    message = {
+        "role": "assistant",
+        "parts": [
+            {
+                "type": "tool",
+                "tool_id": "call-1",
+                "tool_name": "viking_find",
+                "tool_output": "Azure deployment notes found.",
+                "tool_status": "completed",
+                **fields,
+            }
+        ],
+    }
+    restored = openviking_message_to_langchain(message)
 
     assert len(restored) == 1
     assert isinstance(restored[0], ToolMessage)
     assert restored[0].tool_call_id == "call-1"
+    client = InMemoryOpenVikingClient()
+    client.add_message("orphan-result", "assistant", parts=message["parts"])
+    history = OpenVikingChatMessageHistory("orphan-result", client=client)
+    try:
+        assert history.messages == []
+    finally:
+        history.close()
 
 
-def test_history_restores_completed_tool_part_with_input():
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("tool_input", [{"release": "stable"}, {}])
+@pytest.mark.parametrize("status,output", [("completed", "Friday"), ("error", "")])
+async def test_history_restores_completed_tool_part_with_input(
+    asynchronous, tool_input, status, output
+):
     client = InMemoryOpenVikingClient()
     client.add_message(
         "combined-tool",
@@ -881,58 +899,76 @@ def test_history_restores_completed_tool_part_with_input():
                 "type": "tool",
                 "tool_id": "release-2",
                 "tool_name": "read_notes",
-                "tool_input": {"release": "stable"},
-                "tool_output": "Released on Friday.",
-                "tool_status": "completed",
+                "tool_input": tool_input,
+                "tool_output": output,
+                "tool_status": status,
             }
         ],
     )
-    history = OpenVikingChatMessageHistory(session_id="combined-tool", client=client)
-
-    ai, tool = history.messages
+    history = OpenVikingChatMessageHistory(
+        session_id="combined-tool", client=client, async_client=client
+    )
+    stored = deepcopy(client.sessions["combined-tool"])
+    try:
+        ai, tool = await history.aget_messages() if asynchronous else history.messages
+    finally:
+        await history.aclose()
 
     assert isinstance(ai, AIMessage)
     assert ai.tool_calls[0]["id"] == "release-2"
-    assert ai.tool_calls[0]["args"] == {"release": "stable"}
+    assert ai.tool_calls[0]["name"] == "read_notes"
+    assert ai.tool_calls[0]["args"] == tool_input
     assert isinstance(tool, ToolMessage)
-    assert tool.content == "Released on Friday."
+    assert tool.tool_call_id == "release-2"
+    assert tool.content == output
+    assert tool.status == ("error" if status == "error" else "success")
+    assert client.sessions["combined-tool"] == stored
 
 
-def test_history_does_not_duplicate_pending_call_for_completed_tool_part():
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("tool_input", [{"a": 1}, {}])
+@pytest.mark.parametrize("layout", ["split", "coalesced", "mixed"])
+async def test_history_does_not_duplicate_pending_call_for_completed_tool_part(
+    asynchronous, tool_input, layout
+):
     client = InMemoryOpenVikingClient()
-    client.add_message(
-        "split-tool",
-        "assistant",
-        parts=[
-            {
-                "type": "tool",
-                "tool_id": "c1",
-                "tool_name": "read_notes",
-                "tool_input": {"a": 1},
-                "tool_status": "pending",
-            }
-        ],
+    pending = {
+        "type": "tool",
+        "tool_id": "c1",
+        "tool_name": "read_notes",
+        "tool_input": tool_input,
+        "tool_status": "pending",
+    }
+    completed = {**pending, "tool_status": "completed", "tool_output": "ok"}
+    if layout != "coalesced":
+        client.add_message("split-tool", "assistant", parts=[pending])
+    parts = [pending, completed] if layout == "coalesced" else [completed]
+    if layout == "mixed":
+        parts += [
+            {"type": "text", "text": "Lookup complete."},
+            {**completed, "tool_id": "c2"},
+        ]
+    client.add_message("split-tool", "assistant", parts=parts)
+    history = OpenVikingChatMessageHistory(
+        session_id="split-tool", client=client, async_client=client
     )
-    client.add_message(
-        "split-tool",
-        "assistant",
-        parts=[
-            {
-                "type": "tool",
-                "tool_id": "c1",
-                "tool_name": "read_notes",
-                "tool_input": {"a": 1},
-                "tool_output": "ok",
-                "tool_status": "completed",
-            }
-        ],
+    stored = deepcopy(client.sessions["split-tool"])
+    try:
+        messages = await history.aget_messages() if asynchronous else history.messages
+    finally:
+        await history.aclose()
+    expected_types = [AIMessage, ToolMessage] * (2 if layout == "mixed" else 1)
+    assert [type(message) for message in messages] == expected_types
+    assert [call["id"] for message in messages[::2] for call in message.tool_calls] == (
+        ["c1", "c2"] if layout == "mixed" else ["c1"]
     )
-    history = OpenVikingChatMessageHistory(session_id="split-tool", client=client)
-
-    messages = history.messages
-
-    assert [type(m) for m in messages] == [AIMessage, ToolMessage]
-    assert len(messages[0].tool_calls) == 1
+    assert [message.tool_call_id for message in messages[1::2]] == (
+        ["c1", "c2"] if layout == "mixed" else ["c1"]
+    )
+    if layout == "mixed":
+        assert messages[2].content == "Lookup complete."
+    assert client.sessions["split-tool"] == stored
 
 
 def test_empty_human_message_uses_empty_text_part():

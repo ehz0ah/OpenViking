@@ -124,6 +124,7 @@ def openviking_message_to_langchain(message: dict[str, Any]) -> list[BaseMessage
         return [HumanMessage(content=text)]
 
     tool_calls = []
+    tool_call_ids: set[str] = set()
     tool_messages = []
     for part in parts:
         if part.get("type") != "tool":
@@ -133,9 +134,10 @@ def openviking_message_to_langchain(message: dict[str, Any]) -> list[BaseMessage
         status = str(part.get("tool_status") or "")
         has_output = part.get("tool_output") is not None
         is_completed_result = has_output or status in {"completed", "error"}
-        if is_completed_result:
-            if tool_id and part.get("tool_input"):
-                # A completed part that also records its input carries the call itself.
+        if not is_completed_result or (
+            tool_id and tool_name and part.get("tool_input") is not None
+        ):
+            if not tool_id or tool_id not in tool_call_ids:
                 tool_calls.append(
                     {
                         "id": tool_id,
@@ -143,6 +145,8 @@ def openviking_message_to_langchain(message: dict[str, Any]) -> list[BaseMessage
                         "args": _tool_args(part.get("tool_input")),
                     }
                 )
+                tool_call_ids.add(tool_id)
+        if is_completed_result:
             tool_messages.append(
                 ToolMessage(
                     content=str(part.get("tool_output") or ""),
@@ -150,14 +154,6 @@ def openviking_message_to_langchain(message: dict[str, Any]) -> list[BaseMessage
                     name=tool_name or None,
                     status="error" if status == "error" else "success",
                 )
-            )
-        else:
-            tool_calls.append(
-                {
-                    "id": tool_id,
-                    "name": tool_name,
-                    "args": _tool_args(part.get("tool_input")),
-                }
             )
 
     messages: list[BaseMessage] = []
@@ -177,7 +173,8 @@ def restore_openviking_messages(messages: Sequence[dict[str, Any]]) -> list[Base
     restored: list[BaseMessage] = []
     active_tool_call_ids: set[str] = set()
     for message in messages:
-        for langchain_message in openviking_message_to_langchain(message):
+        converted = openviking_message_to_langchain(message)
+        for langchain_message in converted:
             if isinstance(langchain_message, AIMessage):
                 if any(
                     str(tc.get("id") or "") in active_tool_call_ids
@@ -191,9 +188,15 @@ def restore_openviking_messages(messages: Sequence[dict[str, Any]]) -> list[Base
                     ]
                     if not kept and not langchain_message.content:
                         continue
-                    langchain_message = AIMessage(
-                        content=langchain_message.content, tool_calls=kept
-                    )
+                    # Finish earlier calls before emitting another assistant turn.
+                    for result in converted[1:]:
+                        if (
+                            isinstance(result, ToolMessage)
+                            and result.tool_call_id in active_tool_call_ids
+                        ):
+                            restored.append(result)
+                            active_tool_call_ids.discard(result.tool_call_id)
+                    langchain_message = langchain_message.model_copy(update={"tool_calls": kept})
                 restored.append(langchain_message)
                 for tool_call in langchain_message.tool_calls or []:
                     tool_call_id = str(tool_call.get("id") or "")
