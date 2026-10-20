@@ -913,6 +913,9 @@ def _latest_user_text_from_input(input_value: Any, input_messages_key: str | Non
     if isinstance(input_value, str):
         return input_value
     if isinstance(input_value, dict):
+        value = input_value.get(input_messages_key or "messages")
+        if isinstance(value, str):
+            return value.strip()
         for value in input_value.values():
             if isinstance(value, str) and value.strip():
                 return value.strip()

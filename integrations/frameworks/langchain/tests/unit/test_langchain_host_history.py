@@ -111,7 +111,7 @@ async def test_host_history_recalls_supported_current_message_inputs(
         input_messages_key="question",
         history_messages_key="history",
     ) as runnable:
-        payload = {"question": current, "ability": "not the current query"}
+        payload = {"ability": "not the current query", "question": current}
         if streaming and asynchronous:
             content = "".join([chunk.content async for chunk in runnable.astream(payload)])
         elif streaming:
