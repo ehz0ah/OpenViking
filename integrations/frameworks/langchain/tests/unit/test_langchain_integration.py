@@ -1958,10 +1958,12 @@ def test_langgraph_store_batch_rejects_ttl_writes():
         "explicit-peer-memory",
     ],
 )
+@pytest.mark.parametrize("asynchronous", [False, True])
 def test_langgraph_store_accepts_canonical_result_uris_for_home_alias_root(
     root_uri,
     alias_prefix,
     canonical_prefix,
+    asynchronous,
 ):
     class CanonicalizingClient(InMemoryOpenVikingClient):
         def _canonicalize(self, value):
@@ -1991,14 +1993,30 @@ def test_langgraph_store_accepts_canonical_result_uris_for_home_alias_root(
 
     store.put(("users", "ada"), "preferences", {"color": "azure"})
 
-    assert store.get(("users", "ada"), "preferences").value == {"color": "azure"}
-    assert [item.key for item in store.search(("users",))] == ["preferences"]
-    assert store.list_namespaces(prefix=("users",)) == [("users", "ada")]
-    semantic = store.search(("users",), query="azure", limit=5)
+    async def read_results():
+        return (
+            await store.aget(("users", "ada"), "preferences"),
+            await store.asearch(("users",)),
+            await store.alist_namespaces(prefix=("users", "*")),
+            await store.asearch(("users",), query="azure", limit=5),
+        )
 
-    assert semantic[0].namespace == ("users", "ada")
-    assert semantic[0].key == "preferences"
-    assert semantic[0].value["color"] == "azure"
+    direct, ordinary, namespaces, semantic = (
+        asyncio.run(read_results())
+        if asynchronous
+        else (
+            store.get(("users", "ada"), "preferences"),
+            store.search(("users",)),
+            store.list_namespaces(prefix=("users", "*")),
+            store.search(("users",), query="azure", limit=5),
+        )
+    )
+    assert direct.value == {"color": "azure"}
+    assert [item.key for item in ordinary] == ["preferences"]
+    assert namespaces == [("users", "ada")]
+    assert [(item.namespace, item.key, item.value) for item in semantic] == [
+        (("users", "ada"), "preferences", {"color": "azure"})
+    ]
 
 
 def test_langgraph_store_ignores_unrelated_canonical_result_uris():
