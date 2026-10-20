@@ -20,10 +20,14 @@ function entryPayload(entry) {
   return entry;
 }
 
-export function extractBranchCapturePayloads(branch, syncedEntryCount = 0, cfg = {}) {
+export function extractBranchCapturePayloads(branch, syncedEntryCount = 0, cfg = {}, syncedEntryId = "") {
   const entries = Array.isArray(branch) ? branch : [];
   const previousCount = Math.max(0, Number(syncedEntryCount) || 0);
-  const resetWatermark = entries.length < previousCount;
+  const previousId = typeof syncedEntryId === "string" ? syncedEntryId : "";
+  const observedId = previousCount > 0 && previousCount <= entries.length
+    ? String(entries[previousCount - 1]?.id || "")
+    : "";
+  const resetWatermark = entries.length < previousCount || Boolean(previousId && observedId !== previousId);
   const start = resetWatermark ? 0 : Math.min(previousCount, entries.length);
   const payloads = [];
 
@@ -59,6 +63,7 @@ export function extractBranchCapturePayloads(branch, syncedEntryCount = 0, cfg =
   return {
     payloads,
     nextEntryCount: entries.length,
+    nextEntryId: String(entries.at(-1)?.id || ""),
     observedEntryCount: entries.length,
     resetWatermark,
   };

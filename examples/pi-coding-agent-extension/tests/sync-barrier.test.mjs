@@ -247,16 +247,67 @@ test("restoreWatermark prevents pi -c from re-syncing already captured entries",
     });
     const sync = new SyncManager(c, config());
     await sync.ensureSession("pi-session");
-    sync.restoreWatermark(1);
+    const branch = [
+      { id: "captured", type: "message", message: { role: "user", content: "Already captured entry should be skipped." } },
+      { id: "fresh", type: "message", message: { role: "user", content: "Fresh entry should be captured now." } },
+    ];
+    sync.restoreWatermark(1, branch);
 
-    const result = await sync.syncBranch([
-      { type: "message", message: { role: "user", content: "Already captured entry should be skipped." } },
-      { type: "message", message: { role: "user", content: "Fresh entry should be captured now." } },
-    ]);
+    const result = await sync.syncBranch(branch);
 
     assert.equal(result.added, 1);
     assert.equal(calls.length, 1);
     assert.match(calls[0].parts[0].text, /Fresh entry/);
+  });
+});
+
+test("syncBranch re-extracts an equal-length sibling instead of skipping it", async () => {
+  await withPendingDir(async () => {
+    const calls = [];
+    const c = client({
+      fetchJSON: async (_path, init) => {
+        calls.push(JSON.parse(init.body).messages);
+        return { ok: true, result: {} };
+      },
+    });
+    const sync = new SyncManager(c, config());
+    await sync.ensureSession("pi-session");
+    const root = {
+      id: "root",
+      type: "message",
+      message: { role: "user", content: "Remember the deployment plan for this project." },
+    };
+    const branchA = [
+      root,
+      {
+        id: "branch-a",
+        parentId: "root",
+        type: "message",
+        message: { role: "assistant", content: "Branch A uses the blue deployment path." },
+      },
+    ];
+    const branchB = [
+      root,
+      {
+        id: "branch-b",
+        parentId: "root",
+        type: "message",
+        message: { role: "assistant", content: "Branch B uses the green deployment path." },
+      },
+    ];
+
+    assert.equal((await sync.syncBranch(branchA)).added, 2);
+    assert.equal((await sync.syncBranch(branchB)).added, 2);
+    assert.equal((await sync.syncBranch(branchA)).added, 2);
+    assert.equal(sync.syncedCount, 2);
+    assert.deepEqual(
+      calls[1].map((payload) => payload.parts[0].text),
+      ["Remember the deployment plan for this project.", "Branch B uses the green deployment path."],
+    );
+    assert.deepEqual(
+      calls[2].map((payload) => payload.parts[0].text),
+      ["Remember the deployment plan for this project.", "Branch A uses the blue deployment path."],
+    );
   });
 });
 
