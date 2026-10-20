@@ -72,8 +72,11 @@ def test_recall_assembler_does_not_read_history_by_default():
 
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("shape", ["list", "tuple", "single", "string"])
+@pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.asyncio
-async def test_host_history_recalls_supported_current_message_inputs(asynchronous, shape):
+async def test_host_history_recalls_supported_current_message_inputs(
+    asynchronous, shape, streaming
+):
     client = NoContextClient({"viking://resources/support.md": "support reset steps"})
     previous = HumanMessage(content="Earlier question.")
     history = InMemoryChatMessageHistory(messages=[previous])
@@ -109,9 +112,15 @@ async def test_host_history_recalls_supported_current_message_inputs(asynchronou
         history_messages_key="history",
     ) as runnable:
         payload = {"question": current, "ability": "not the current query"}
-        response = await runnable.ainvoke(payload) if asynchronous else runnable.invoke(payload)
+        if streaming and asynchronous:
+            content = "".join([chunk.content async for chunk in runnable.astream(payload)])
+        elif streaming:
+            content = "".join(chunk.content for chunk in runnable.stream(payload))
+        else:
+            response = await runnable.ainvoke(payload) if asynchronous else runnable.invoke(payload)
+            content = response.content
 
-    assert response.content == "ok"
+    assert content == "ok"
     assert [call["query"] for call in client.search_calls] == ["support reset"]
     assert any("support reset steps" in str(message.content) for message in seen)
     assert seen[-1].content == "support reset"
@@ -217,8 +226,11 @@ def test_framework_summary_persists_and_resumes_with_no_ov_context(tmp_path):
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("structured", [False, True])
 @pytest.mark.parametrize("inject_context", [False, True])
+@pytest.mark.parametrize("shape", ["list", "tuple", "dict", "dict_tuple"])
 @pytest.mark.asyncio
-async def test_recall_preserves_existing_system_message(asynchronous, structured, inject_context):
+async def test_recall_preserves_existing_system_message(
+    asynchronous, structured, inject_context, shape
+):
     content = "Keep the deployment policy."
     if structured:
         content = [
@@ -240,6 +252,8 @@ async def test_recall_preserves_existing_system_message(asynchronous, structured
     seen = []
 
     def answer(messages):
+        if isinstance(messages, dict):
+            messages = messages["messages"]
         seen.extend(messages)
         return AIMessage(content="Acknowledged.")
 
@@ -250,6 +264,13 @@ async def test_recall_preserves_existing_system_message(asynchronous, structured
         inject_context=inject_context,
     ) as runnable:
         values = [system, HumanMessage(content="azure deployment")]
+        if shape == "tuple":
+            values = tuple(values)
+        elif shape == "dict":
+            values = {"messages": values}
+        elif shape == "dict_tuple":
+            values = {"messages": tuple(values)}
+        original_values = deepcopy(values)
         config = {"configurable": {"session_id": "policy"}}
         if asynchronous:
             await runnable.ainvoke(values, config=config)
@@ -259,6 +280,7 @@ async def test_recall_preserves_existing_system_message(asynchronous, structured
     observed = next(message for message in seen if isinstance(message, SystemMessage))
     assert observed.model_dump(exclude={"content"}) == system.model_dump(exclude={"content"})
     assert system.model_dump() == before
+    assert values == original_values
     if not inject_context:
         assert observed.content == content
     elif structured:

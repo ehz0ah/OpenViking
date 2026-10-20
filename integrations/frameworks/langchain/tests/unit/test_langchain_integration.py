@@ -1248,6 +1248,20 @@ def test_session_context_assembler_uses_archive_active_messages_and_recall(
     assert assembled.context_parts == [
         {"type": "context", "uri": uri, "context_type": context_type, "abstract": content[:240]}
     ]
+    recorder = OpenVikingSessionRecorder(client=client)
+    recorder.record(
+        "assembler-session",
+        [HumanMessage(content="Deployment question"), AIMessage(content="Deployment answer")],
+        context_parts=assembled.context_parts,
+    )
+    assert [
+        part
+        for message in client.sessions["assembler-session"][-2:]
+        for part in message["parts"]
+        if part["type"] == "context"
+    ] == assembled.context_parts
+    asyncio.run(recorder.aclose())
+    asyncio.run(assembler.aclose())
 
 
 def test_session_context_assembler_keeps_peer_id_out_of_recall():
