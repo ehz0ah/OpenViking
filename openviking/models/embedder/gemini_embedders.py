@@ -26,10 +26,11 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 # Keep for backward-compat with existing unit tests that import it
-_GEMINI_INPUT_TOKEN_LIMIT = 8192  # gemini-embedding-2-preview hard limit
+_GEMINI_INPUT_TOKEN_LIMIT = 8192  # Gemini Embedding 2 hard limit
 
 # Per-model token limits (Google API hard limits, from official docs)
 _MODEL_TOKEN_LIMITS: Dict[str, int] = {
+    "gemini-embedding-2": 8192,
     "gemini-embedding-2-preview": 8192,
     "gemini-embedding-001": 2048,
 }
@@ -48,11 +49,21 @@ _VALID_TASK_TYPES: frozenset = frozenset(
     }
 )
 
+_GEMINI_EMBEDDING_2_TASK_PREFIXES: Dict[str, str] = {
+    "RETRIEVAL_QUERY": "task: search result | query: ",
+    "SEMANTIC_SIMILARITY": "task: sentence similarity | query: ",
+    "CLASSIFICATION": "task: classification | query: ",
+    "CLUSTERING": "task: clustering | query: ",
+    "QUESTION_ANSWERING": "task: question answering | query: ",
+    "FACT_VERIFICATION": "task: fact checking | query: ",
+    "CODE_RETRIEVAL_QUERY": "task: code retrieval | query: ",
+}
+
 _ERROR_HINTS: Dict[int, str] = {
     400: "Invalid request — check model name and task_type value.",
     401: "Invalid API key. Verify your GOOGLE_API_KEY or api_key in config.",
     403: "Permission denied. API key may lack access to this model.",
-    404: "Model not found: '{model}'. Check spelling (e.g. 'gemini-embedding-2-preview').",
+    404: "Model not found: '{model}'. Check spelling (e.g. 'gemini-embedding-2').",
     429: "Resource exhausted. Wait and retry.",
     500: "Gemini service error (Google-side). Retry after a delay.",
     503: "Gemini service unavailable. Retry after a delay.",
@@ -74,7 +85,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
     """Dense embedder backed by Google's Gemini Embedding models.
 
     REST endpoint: /v1beta/models/{model}:embedContent (SDK handles Parts format internally).
-    Input token limit: per-model (8192 for gemini-embedding-2-preview, 2048 for gemini-embedding-001).
+    Input token limit: per-model (8192 for gemini-embedding-2, 2048 for gemini-embedding-001).
     Output dimension: 1–3072 (MRL; recommended 768, 1536, 3072; default 3072).
     Task types: RETRIEVAL_QUERY, RETRIEVAL_DOCUMENT, SEMANTIC_SIMILARITY, CLASSIFICATION,
                 CLUSTERING, CODE_RETRIEVAL_QUERY, QUESTION_ANSWERING, FACT_VERIFICATION.
@@ -82,7 +93,8 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
     """
 
     # Default output dimensions per model (used when user does not specify `dimension`).
-    # gemini-embedding-2-preview: 3072 MRL model — supports 1–3072 via output_dimensionality
+    # gemini-embedding-2:         3072 MRL model — supports 1–3072 via output_dimensionality
+    # gemini-embedding-2-preview: 3072 MRL model retained for explicit legacy configurations
     # gemini-embedding-001:       3072 (native 768-dim vectors; 3072 shown as default for MRL compat)
     # text-embedding-004:         768  fixed-dim legacy model, does not support MRL truncation
     # Future gemini-embedding-*:  default 3072 via _default_dimension() fallback
@@ -90,6 +102,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
     supports_multimodal: bool = False  # text-only; multimodal planned separately
 
     KNOWN_DIMENSIONS: Dict[str, int] = {
+        "gemini-embedding-2": 3072,
         "gemini-embedding-2-preview": 3072,
         "gemini-embedding-001": 3072,
         "text-embedding-004": 768,
@@ -105,8 +118,8 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         3. Fallback: 3072 (gemini-embedding-* MRL models)
 
         Examples:
+            gemini-embedding-2         → 3072 (exact match)
             gemini-embedding-2-preview → 3072 (exact match)
-            gemini-embedding-2         → 3072 (fallback — future model)
             text-embedding-004         → 768  (exact match)
             text-embedding-005         → 768  (prefix rule — future model)
         """
@@ -118,7 +131,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
 
     def __init__(
         self,
-        model_name: str = "gemini-embedding-2-preview",
+        model_name: str = "gemini-embedding-2",
         api_key: Optional[str] = None,
         dimension: Optional[int] = None,
         task_type: Optional[str] = None,
@@ -177,6 +190,34 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 task_type = self.document_param
         return task_type
 
+    def _prepare_request(
+        self,
+        text: str,
+        *,
+        task_type: Optional[str] = None,
+        title: Optional[str] = None,
+    ) -> tuple[str, types.EmbedContentConfig]:
+        """Build the model-specific text and request config."""
+        effective_task_type = task_type or self.task_type
+        if self.model_name != "gemini-embedding-2":
+            return text, self._build_config(task_type=effective_task_type, title=title)
+
+        normalized_task_type = effective_task_type.upper() if effective_task_type else None
+        if normalized_task_type and normalized_task_type not in _VALID_TASK_TYPES:
+            raise ValueError(
+                f"Invalid task_type '{effective_task_type}'. "
+                f"Valid values: {', '.join(sorted(_VALID_TASK_TYPES))}"
+            )
+
+        # Stable Embedding 2 rejects EmbedContentConfig.task_type. Google
+        # documents equivalent text instructions for each supported task.
+        if normalized_task_type == "RETRIEVAL_DOCUMENT" or (normalized_task_type is None and title):
+            text = f"title: {title or 'none'} | text: {text}"
+        elif normalized_task_type:
+            text = _GEMINI_EMBEDDING_2_TASK_PREFIXES[normalized_task_type] + text
+
+        return text, types.EmbedContentConfig(output_dimensionality=self._dimension)
+
     def __repr__(self) -> str:
         return (
             f"GeminiDenseEmbedder("
@@ -198,13 +239,14 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             logger.warning("Empty text passed to embed(), returning zero vector")
             return EmbedResult(dense_vector=[0.0] * self._dimension)
         task_type = self._resolve_task_type(is_query=is_query, task_type=task_type)
+        request_text, request_config = self._prepare_request(text, task_type=task_type, title=title)
 
         # SDK accepts plain str; converts to REST Parts format internally.
         def _call() -> EmbedResult:
             result = self.client.models.embed_content(
                 model=self.model_name,
-                contents=text,
-                config=self._build_config(task_type=task_type, title=title),
+                contents=request_text,
+                config=request_config,
             )
             vector = truncate_and_normalize(list(result.embeddings[0].values), self._dimension)
             return EmbedResult(dense_vector=vector)
@@ -216,7 +258,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 operation_name="Gemini embedding",
             )
             # Estimate token usage
-            estimated_tokens = self._estimate_tokens(text)
+            estimated_tokens = self._estimate_tokens(request_text)
             self.update_token_usage(
                 model_name=self.model_name,
                 provider="gemini",
@@ -241,6 +283,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=[0.0] * self._dimension)
 
         task_type = self._resolve_task_type(is_query=is_query, task_type=task_type)
+        request_text, request_config = self._prepare_request(text, task_type=task_type, title=title)
 
         async def _call() -> EmbedResult:
             # Keep creation, use and cleanup on the calling event loop.
@@ -249,8 +292,8 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 async with client.aio as async_client:
                     result = await async_client.models.embed_content(
                         model=self.model_name,
-                        contents=text,
-                        config=self._build_config(task_type=task_type, title=title),
+                        contents=request_text,
+                        config=request_config,
                     )
             vector = truncate_and_normalize(list(result.embeddings[0].values), self._dimension)
             return EmbedResult(dense_vector=vector)
@@ -261,7 +304,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 logger=logger,
                 operation_name="Gemini async embedding",
             )
-            estimated_tokens = self._estimate_tokens(text)
+            estimated_tokens = self._estimate_tokens(request_text)
             self.update_token_usage(
                 model_name=self.model_name,
                 provider="gemini",

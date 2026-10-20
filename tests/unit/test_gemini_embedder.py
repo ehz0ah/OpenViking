@@ -56,7 +56,8 @@ class TestGeminiDenseEmbedderInit:
     def test_default_dimension_3072(self, mock_client_class):
         from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key")
+        embedder = GeminiDenseEmbedder(api_key="key")
+        assert embedder.model_name == "gemini-embedding-2"
         assert embedder.get_dimension() == 3072
 
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
@@ -107,16 +108,17 @@ class TestGeminiDenseEmbedderEmbed:
 
         mock_client = mock_client_class.return_value
         mock_client.models.embed_content.return_value = _make_mock_result([[0.1, 0.2, 0.3]])
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key", dimension=3)
+        embedder = GeminiDenseEmbedder(api_key="key", dimension=3)
         result = embedder.embed("hello world")
         assert result.dense_vector is not None
         assert len(result.dense_vector) == 3
         mock_client.models.embed_content.assert_called_once()
         _, kwargs = mock_client.models.embed_content.call_args
-        assert kwargs["model"] == "gemini-embedding-2-preview"
+        assert kwargs["model"] == "gemini-embedding-2"
+        assert kwargs["contents"] == "hello world"
 
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_embed_passes_task_type_in_config(self, mock_client_class):
+    def test_preview_embed_passes_task_type_in_config(self, mock_client_class):
         from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 
         mock_client = mock_client_class.return_value
@@ -130,6 +132,62 @@ class TestGeminiDenseEmbedderEmbed:
         embedder.embed("query text")
         _, kwargs = mock_client.models.embed_content.call_args
         assert kwargs["config"].task_type == "RETRIEVAL_QUERY"
+
+    @pytest.mark.parametrize(
+        "task_type,title,expected",
+        [
+            ("RETRIEVAL_QUERY", None, "task: search result | query: text"),
+            ("RETRIEVAL_DOCUMENT", None, "title: none | text: text"),
+            ("RETRIEVAL_DOCUMENT", "Guide", "title: Guide | text: text"),
+            ("SEMANTIC_SIMILARITY", None, "task: sentence similarity | query: text"),
+            ("CLASSIFICATION", None, "task: classification | query: text"),
+            ("CLUSTERING", None, "task: clustering | query: text"),
+            ("QUESTION_ANSWERING", None, "task: question answering | query: text"),
+            ("FACT_VERIFICATION", None, "task: fact checking | query: text"),
+            ("CODE_RETRIEVAL_QUERY", None, "task: code retrieval | query: text"),
+        ],
+    )
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_stable_model_formats_task_in_text(self, mock_client_class, task_type, title, expected):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        mock_client = mock_client_class.return_value
+        mock_client.models.embed_content.return_value = _make_mock_result([[0.1]])
+        embedder = GeminiDenseEmbedder("gemini-embedding-2", api_key="key", dimension=1)
+
+        embedder.embed("text", task_type=task_type, title=title)
+
+        request = mock_client.models.embed_content.call_args.kwargs
+        assert request["contents"] == expected
+        assert request["config"].task_type is None
+        assert request["config"].title is None
+
+    @pytest.mark.parametrize(
+        "is_query,expected",
+        [
+            (True, "task: search result | query: text"),
+            (False, "title: none | text: text"),
+        ],
+    )
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_stable_model_routes_query_and_document_params(
+        self, mock_client_class, is_query, expected
+    ):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        mock_client = mock_client_class.return_value
+        mock_client.models.embed_content.return_value = _make_mock_result([[0.1]])
+        embedder = GeminiDenseEmbedder(
+            "gemini-embedding-2",
+            api_key="key",
+            dimension=1,
+            query_param="retrieval_query",
+            document_param="retrieval_document",
+        )
+
+        embedder.embed("text", is_query=is_query)
+
+        assert mock_client.models.embed_content.call_args.kwargs["contents"] == expected
 
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
     def test_embed_raises_model_error_on_api_error(self, mock_client_class):
@@ -345,7 +403,7 @@ class TestBuildConfig:
             GeminiDenseEmbedder,
         )
 
-        GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key")
+        GeminiDenseEmbedder(api_key="key")
         mock_client_class.assert_called_once()
         call_kwargs = mock_client_class.call_args[1]
         assert call_kwargs.get("api_key") == "key"

@@ -12,12 +12,12 @@ from openviking_cli.utils.config.embedding_config import EmbeddingConfig, Embedd
 def _gcfg(**kw) -> EmbeddingModelConfig:
     """Helper: build a Gemini EmbeddingModelConfig with defaults."""
     return EmbeddingModelConfig(
-        model="gemini-embedding-2-preview", provider="gemini", api_key="test-key", **kw
+        model="gemini-embedding-2", provider="gemini", api_key="test-key", **kw
     )
 
 
 class TestGeminiDimension:
-    def test_preview_defaults_3072(self):
+    def test_stable_defaults_3072(self):
         assert _gcfg().get_effective_dimension() == 3072
 
     def test_001_defaults_3072(self):
@@ -83,7 +83,7 @@ def test_factory_raises_clear_error_when_google_genai_not_installed():
 class TestGeminiConfigValidation:
     def test_missing_api_key_raises(self):
         with pytest.raises(ValueError, match="api_key"):
-            EmbeddingModelConfig(model="gemini-embedding-2-preview", provider="gemini")
+            EmbeddingModelConfig(model="gemini-embedding-2", provider="gemini")
 
     def test_invalid_query_param_raises(self):
         with pytest.raises(ValueError, match="Invalid query_param"):
