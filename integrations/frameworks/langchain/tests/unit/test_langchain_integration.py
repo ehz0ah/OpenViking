@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from copy import deepcopy
 from types import MappingProxyType
@@ -1654,6 +1655,9 @@ def test_langgraph_store_round_trip_and_semantic_search(invalid_namespace):
         with pytest.raises(InvalidNamespaceError):
             store.put(invalid_namespace, "preferences", value)
         assert client.records == records
+        with pytest.raises(InvalidNamespaceError):
+            asyncio.run(store.aput(invalid_namespace, "preferences", value))
+        assert client.records == records
 
     # A None value is a deletion in LangGraph's BaseStore contract.
     store.put(("users", "ada"), "profile", None)
@@ -1670,40 +1674,88 @@ def test_langgraph_store_round_trip_and_semantic_search(invalid_namespace):
     assert store.list_namespaces(prefix=("users",)) == []
 
 
-def test_langgraph_store_put_none_deletes_existing_item_and_is_idempotent_on_missing_key():
-    """Regression coverage for issue #5821: ``OpenVikingStore.put(..., value=None)``
-    must follow LangGraph's ``BaseStore.put`` contract and delete the item,
-    not persist a null-valued record. Deleting a missing key must be
-    idempotent (no item created) so callers can use ``put(..., None)`` as a
-    unconditional delete.
-    """
+@pytest.mark.parametrize("method", ["put", "aput", "batch", "abatch", "delete", "adelete"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_langgraph_store_none_deletes_through_public_store_methods(
+    method: str, existing: bool
+) -> None:
+    store = OpenVikingStore(client=InMemoryOpenVikingClient())
+    namespace = ("users", "ada", "memories")
+    other_namespace = ("users", "grace", "memories")
+    store.put(other_namespace, "keep", {"text": "independent memory"})
+    if existing:
+        store.put(namespace, "item", {"text": "memory to remove"})
 
-    client = InMemoryOpenVikingClient()
-    store = OpenVikingStore(client=client)
+    if method == "put":
+        store.put(namespace, "item", None)
+    elif method == "aput":
+        asyncio.run(store.aput(namespace, "item", None))
+    elif method == "batch":
+        store.batch([PutOp(namespace, "item", None)])
+    elif method == "abatch":
+        asyncio.run(store.abatch([PutOp(namespace, "item", None)]))
+    elif method == "delete":
+        store.delete(namespace, "item")
+    else:
+        asyncio.run(store.adelete(namespace, "item"))
 
+    assert store.get(namespace, "item") is None
+    assert store.search(namespace) == []
+    assert store.search(namespace, query="memory to remove") == []
+    assert store.list_namespaces() == [other_namespace]
+    assert store.get(other_namespace, "keep").value == {"text": "independent memory"}
+
+
+@pytest.mark.parametrize("index", [False, ["text"]])
+@pytest.mark.parametrize("existing", [False, True])
+def test_langgraph_store_put_none_deletes_with_index_overrides(
+    index: bool | list[str], existing: bool
+) -> None:
+    store = OpenVikingStore(client=InMemoryOpenVikingClient())
     namespace = ("users", "ada")
-    key = "preferences"
+    if existing:
+        store.put(namespace, "item", {"text": "memory to remove"})
 
-    # Step 1: seed an existing item so get() / search() / list_namespaces()
-    # are non-empty before the deletion.
-    store.put(namespace, key, {"color": "azure"})
+    store.put(namespace, "item", None, index=index)
 
-    seeded = store.get(namespace, key)
-    assert seeded is not None and seeded.value == {"color": "azure"}
-    assert store.list_namespaces(prefix=namespace) == [namespace]
+    assert store.get(namespace, "item") is None
+    assert store.search(namespace) == []
+    assert store.search(namespace, query="memory to remove") == []
+    assert store.list_namespaces() == []
 
-    # Step 2: put(..., None) on the existing key must delete it.
-    store.put(namespace, key, None)
-    assert store.get(namespace, key) is None
-    assert store.search(namespace_prefix=namespace) == []
-    assert store.list_namespaces(prefix=namespace) == []
 
-    # Step 3: put(..., None) on a never-written key must be a no-op
-    # (no null-valued record, namespace still absent from list_namespaces()).
-    missing_key = "never_written"
-    store.put(namespace, missing_key, None)
-    assert store.get(namespace, missing_key) is None
-    assert store.list_namespaces(prefix=namespace) == []
+@pytest.mark.parametrize("method", ["put", "aput"])
+@pytest.mark.parametrize("value", [{}, {"number": 0}, {"text": "saved memory"}])
+def test_langgraph_store_dictionary_values_remain_stored(method: str, value: dict) -> None:
+    store = OpenVikingStore(client=InMemoryOpenVikingClient())
+    namespace = ("users", "ada")
+    if method == "put":
+        store.put(namespace, "item", value)
+    else:
+        asyncio.run(store.aput(namespace, "item", value))
+
+    assert store.get(namespace, "item").value == value
+    assert store.search(namespace)[0].value == value
+    assert store.list_namespaces() == [namespace]
+
+
+@pytest.mark.parametrize("method", ["put", "aput"])
+@pytest.mark.parametrize("value", [None, {"text": "replacement"}])
+def test_langgraph_store_unsupported_ttl_still_rejects_before_mutation(
+    method: str, value: dict | None
+) -> None:
+    store = OpenVikingStore(client=InMemoryOpenVikingClient())
+    namespace = ("users", "ada")
+    original = {"text": "original memory"}
+    store.put(namespace, "item", original)
+
+    with pytest.raises(NotImplementedError, match="TTL"):
+        if method == "put":
+            store.put(namespace, "item", value, ttl=60)
+        else:
+            asyncio.run(store.aput(namespace, "item", value, ttl=60))
+
+    assert store.get(namespace, "item").value == original
 
 
 @pytest.mark.parametrize("use_batch", [False, True])
@@ -1725,12 +1777,20 @@ def test_langgraph_store_accepts_mapping_values(use_batch):
 
 
 @pytest.mark.parametrize(
-    ("operation", "collection"), [("delete", "data"), ("delete", "index"), ("put", "index")]
+    ("method", "collection", "deindex"),
+    [
+        (method, collection, False)
+        for method in ("delete", "adelete", "put", "aput", "batch", "abatch")
+        for collection in ("data", "index")
+    ]
+    + [(method, "index", True) for method in ("put", "aput", "batch", "abatch")],
 )
 @pytest.mark.parametrize(
     "error", [PermissionDeniedError(), UnavailableError(), TimeoutError("removal timed out")]
 )
-def test_langgraph_store_removal_errors_remain_visible_and_retryable(operation, collection, error):
+async def test_langgraph_store_removal_errors_remain_visible_and_retryable(
+    method, collection, deindex, error
+):
     class FailingRemoveClient(InMemoryOpenVikingClient):
         fail = True
 
@@ -1745,23 +1805,44 @@ def test_langgraph_store_removal_errors_remain_visible_and_retryable(operation, 
     store = OpenVikingStore(client=client)
     namespace, key, value = ("users",), "ada", {"color": "azure"}
     store.put(namespace, key, value)
+    store.put(("other",), key, {"color": "teal"})
 
-    def mutate():
-        if operation == "delete":
+    async def mutate():
+        replacement = value if deindex else None
+        index = False if deindex else None
+        if method == "delete":
             store.delete(namespace, key)
+        elif method == "adelete":
+            await store.adelete(namespace, key)
+        elif method == "put":
+            store.put(namespace, key, replacement, index=index)
+        elif method == "aput":
+            await store.aput(namespace, key, replacement, index=index)
         else:
-            store.put(namespace, key, value, index=False)
+            ops = [
+                PutOp(namespace, key, replacement, index=index),
+                PutOp(namespace, "later", {"written": True}),
+            ]
+            if method == "batch":
+                store.batch(ops)
+            else:
+                await store.abatch(ops)
 
     with pytest.raises(type(error)) as caught:
-        mutate()
-    assert caught.value is error
-    assert bool(store.get(namespace, key)) is (operation == "put" or collection == "data")
+        await mutate()
+    assert str(caught.value) == str(error)
+    assert getattr(caught.value, "code", None) == getattr(error, "code", None)
+    assert bool(store.get(namespace, key)) is (deindex or collection == "data")
+    assert store.get(namespace, "later") is None
+    assert store.get(("other",), key).value == {"color": "teal"}
 
     client.fail = False
-    mutate()
+    await mutate()
     assert store.search(namespace, query="azure") == []
     item = store.get(namespace, key)
-    assert (item.value if item else None) == (value if operation == "put" else None)
+    assert (item.value if item else None) == (value if deindex else None)
+    if method in ("batch", "abatch"):
+        assert store.get(namespace, "later").value == {"written": True}
 
 
 @pytest.mark.parametrize("missing_error", [FileNotFoundError, NotFoundError])
