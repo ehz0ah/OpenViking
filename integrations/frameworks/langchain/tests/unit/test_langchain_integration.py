@@ -1993,6 +1993,7 @@ async def test_langgraph_store_indexes_selected_field_paths(
         "literal[0]": "nova",
         "ignored": "solstice",
     }
+    original = deepcopy(value)
     for mode in ("put", "aput", "batch", "abatch"):
         client = InMemoryOpenVikingClient()
         store = OpenVikingStore(client=client, index=[field] if use_default else None)
@@ -2007,8 +2008,22 @@ async def test_langgraph_store_indexes_selected_field_paths(
             await store.abatch([PutOp(("documents",), "note", value, index=index)])
 
         assert store.get(("documents",), "note").value == value
+        assert value == original
         expected_keys = ["note"] if expected_match else []
         assert [item.key for item in store.search(("documents",), query=query)] == expected_keys
+        filter = {"metadata": {"title": "quasar"}}
+        op = SearchOp(("documents",), query=query, filter=filter)
+        results = [
+            store.search(("documents",), query=query, filter=filter),
+            await store.asearch(("documents",), query=query, filter=filter),
+            store.batch([op])[0],
+            (await store.abatch([op]))[0],
+        ]
+        assert all([item.key for item in items] == expected_keys for items in results)
+        assert (
+            store.search(("documents",), query=query, filter={"metadata": {"title": "absent"}})
+            == []
+        )
         if field not in {"$", ""}:
             assert store.search(("documents",), query="solstice") == []
 

@@ -258,6 +258,10 @@ store.put(("users", "ada"), "preferences", None)  # 值为 None 表示删除该�
 `list_namespaces(prefix=("users", "*"))` 中的每个 `*` 匹配一层命名空间，
 也适用于 `viking://~/peers/support/memories/langgraph_store` 这样的 peer 主目录别名。
 
+`search()` 支持 `filter={"metadata": {"color": "blue"}}` 这样的嵌套 JSON 筛选。
+使用 `index=["items[*].text"]` 可以只索引数组中的指定字段，同时保留完整的存储值。
+已有条目的索引会在再次写入该条目时更新。
+
 ### LangGraph middleware
 
 ```python

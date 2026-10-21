@@ -271,6 +271,10 @@ errors propagate, and `put()` does not overwrite a record after a failed read.
 `list_namespaces(prefix=("users", "*"))` matches one namespace label per `*`, including
 when `root_uri` uses a peer home alias such as `viking://~/peers/support/memories/langgraph_store`.
 
+`search()` accepts nested JSON filters such as `filter={"metadata": {"color": "blue"}}`.
+Use `index=["items[*].text"]` to index selected array fields while retaining the complete
+stored value. Existing index projections are updated when the item is written again.
+
 ### LangGraph middleware
 
 ```python
