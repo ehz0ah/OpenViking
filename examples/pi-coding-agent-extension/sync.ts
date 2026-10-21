@@ -72,13 +72,9 @@ export class SyncManager {
     return extracted.payloads.length;
   }
 
-  restoreWatermark(n: number, branch: any[] = []): void {
-    const next = Math.max(0, Math.floor(Number(n) || 0));
-    const entries = Array.isArray(branch) ? branch : [];
-    this.syncedEntryCount = next;
-    this.syncedEntryId = next > 0 && next <= entries.length
-      ? String(entries[next - 1]?.id || "")
-      : "";
+  restoreWatermark(n: number, branch: any[]): void {
+    this.syncedEntryCount = Math.max(0, Math.floor(Number(n) || 0));
+    this.syncedEntryId = branch[this.syncedEntryCount - 1]?.id || "";
   }
 
   async ensureSession(piSessionId: string): Promise<boolean> {

@@ -236,78 +236,37 @@ test("a current-session processing entry keeps the takeover barrier closed", asy
   });
 });
 
-test("restoreWatermark prevents pi -c from re-syncing already captured entries", async () => {
+test("capture cursor skips continuations and re-extracts sibling branches", async () => {
   await withPendingDir(async () => {
     const calls = [];
     const c = client({
       fetchJSON: async (_path, init) => {
-        calls.push(...JSON.parse(init.body).messages);
+        calls.push(JSON.parse(init.body).messages.map((payload) => payload.parts[0].text));
         return { ok: true, result: {} };
       },
     });
     const sync = new SyncManager(c, config());
     await sync.ensureSession("pi-session");
-    const branch = [
-      { id: "captured", type: "message", message: { role: "user", content: "Already captured entry should be skipped." } },
-      { id: "fresh", type: "message", message: { role: "user", content: "Fresh entry should be captured now." } },
-    ];
-    sync.restoreWatermark(1, branch);
+    const [root, a, b, next] = ["root", "branch-a", "branch-b", "next"].map((id) => ({
+      id, type: "message", message: { role: "user", content: id },
+    }));
+    const branchA = [root, a];
+    const branchB = [root, b];
+    sync.restoreWatermark(1, branchA);
 
-    const result = await sync.syncBranch(branch);
+    assert.equal((await sync.syncBranch(branchA)).added, 1);
+    assert.equal((await sync.syncBranch(branchA)).added, 0);
+    await sync.syncBranch(branchB);
+    await sync.syncBranch(branchA);
+    await sync.syncBranch([...branchB, next]);
 
-    assert.equal(result.added, 1);
-    assert.equal(calls.length, 1);
-    assert.match(calls[0].parts[0].text, /Fresh entry/);
-  });
-});
-
-test("syncBranch re-extracts an equal-length sibling instead of skipping it", async () => {
-  await withPendingDir(async () => {
-    const calls = [];
-    const c = client({
-      fetchJSON: async (_path, init) => {
-        calls.push(JSON.parse(init.body).messages);
-        return { ok: true, result: {} };
-      },
-    });
-    const sync = new SyncManager(c, config());
-    await sync.ensureSession("pi-session");
-    const root = {
-      id: "root",
-      type: "message",
-      message: { role: "user", content: "Remember the deployment plan for this project." },
-    };
-    const branchA = [
-      root,
-      {
-        id: "branch-a",
-        parentId: "root",
-        type: "message",
-        message: { role: "assistant", content: "Branch A uses the blue deployment path." },
-      },
-    ];
-    const branchB = [
-      root,
-      {
-        id: "branch-b",
-        parentId: "root",
-        type: "message",
-        message: { role: "assistant", content: "Branch B uses the green deployment path." },
-      },
-    ];
-
-    assert.equal((await sync.syncBranch(branchA)).added, 2);
-    assert.equal((await sync.syncBranch(branchB)).added, 2);
-    assert.equal((await sync.syncBranch(branchA)).added, 2);
-    assert.equal(sync.syncedCount, 2);
-    assert.deepEqual(
-      calls[1].map((payload) => payload.parts[0].text),
-      ["Remember the deployment plan for this project.", "Branch B uses the green deployment path."],
-    );
-    assert.deepEqual(
-      calls[2].map((payload) => payload.parts[0].text),
-      ["Remember the deployment plan for this project.", "Branch A uses the blue deployment path."],
-    );
+    assert.equal(sync.syncedCount, 3);
+    assert.deepEqual(calls, [
+      ["branch-a"],
+      ["root", "branch-b"],
+      ["root", "branch-a"],
+      ["root", "branch-b", "next"],
+    ]);
   });
 });
 
