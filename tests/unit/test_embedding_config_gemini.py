@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Unit tests for Gemini-specific EmbeddingModelConfig and EmbeddingConfig behavior."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -49,14 +49,20 @@ class TestGeminiDimension:
 
 class TestGeminiContextRouting:
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_nonsymmetric_passes_query_document_params(self, _mock):
-        """get_embedder() passes query_param/document_param to GeminiDenseEmbedder."""
+    def test_nonsymmetric_routes_query_and_document(self, mock_client):
         cfg = EmbeddingConfig(
             dense=_gcfg(query_param="RETRIEVAL_QUERY", document_param="RETRIEVAL_DOCUMENT")
         )
         embedder = cfg.get_embedder()
-        assert embedder.query_param == "retrieval_query"
-        assert embedder.document_param == "retrieval_document"
+        request = mock_client.return_value.models.embed_content
+        request.return_value = MagicMock(embeddings=[MagicMock(values=[0.1])])
+        embedder.embed("text")
+        embedder.embed("text", is_query=True)
+        assert [call.kwargs["contents"] for call in request.call_args_list] == [
+            "title: none | text: text",
+            "task: search result | query: text",
+        ]
+        assert request.call_args.kwargs["config"].task_type is None
 
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
     def test_only_query_param_set(self, _mock):
@@ -86,11 +92,11 @@ class TestGeminiConfigValidation:
             EmbeddingModelConfig(model="gemini-embedding-2", provider="gemini")
 
     def test_invalid_query_param_raises(self):
-        with pytest.raises(ValueError, match="Invalid query_param"):
+        with pytest.raises(ValueError, match="invalid query_param"):
             _gcfg(query_param="NOT_A_VALID_TYPE")
 
     def test_invalid_document_param_raises(self):
-        with pytest.raises(ValueError, match="Invalid document_param"):
+        with pytest.raises(ValueError, match="invalid document_param"):
             _gcfg(document_param="ALSO_INVALID")
 
     def test_query_document_param_case_normalized(self):

@@ -36,28 +36,19 @@ _MODEL_TOKEN_LIMITS: Dict[str, int] = {
 }
 _DEFAULT_TOKEN_LIMIT = 2048  # conservative fallback for unknown future models
 
-_VALID_TASK_TYPES: frozenset = frozenset(
-    {
-        "RETRIEVAL_QUERY",
-        "RETRIEVAL_DOCUMENT",
-        "SEMANTIC_SIMILARITY",
-        "CLASSIFICATION",
-        "CLUSTERING",
-        "QUESTION_ANSWERING",
-        "FACT_VERIFICATION",
-        "CODE_RETRIEVAL_QUERY",
-    }
-)
-
-_GEMINI_EMBEDDING_2_TASK_PREFIXES: Dict[str, str] = {
-    "RETRIEVAL_QUERY": "task: search result | query: ",
-    "SEMANTIC_SIMILARITY": "task: sentence similarity | query: ",
-    "CLASSIFICATION": "task: classification | query: ",
-    "CLUSTERING": "task: clustering | query: ",
-    "QUESTION_ANSWERING": "task: question answering | query: ",
-    "FACT_VERIFICATION": "task: fact checking | query: ",
-    "CODE_RETRIEVAL_QUERY": "task: code retrieval | query: ",
+# Stable Embedding 2 uses text instructions instead of task_type/title fields.
+# https://ai.google.dev/gemini-api/docs/embeddings#task-types
+_TASK_INSTRUCTIONS: Dict[str, str] = {
+    "RETRIEVAL_QUERY": "task: search result | query: {text}",
+    "RETRIEVAL_DOCUMENT": "title: {title} | text: {text}",
+    "SEMANTIC_SIMILARITY": "task: sentence similarity | query: {text}",
+    "CLASSIFICATION": "task: classification | query: {text}",
+    "CLUSTERING": "task: clustering | query: {text}",
+    "QUESTION_ANSWERING": "task: question answering | query: {text}",
+    "FACT_VERIFICATION": "task: fact checking | query: {text}",
+    "CODE_RETRIEVAL_QUERY": "task: code retrieval | query: {text}",
 }
+_VALID_TASK_TYPES: frozenset = frozenset(_TASK_INSTRUCTIONS)
 
 _ERROR_HINTS: Dict[int, str] = {
     400: "Invalid request — check model name and task_type value.",
@@ -162,61 +153,34 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         self._dimension = dimension or self._default_dimension(model_name)
         self._token_limit = _MODEL_TOKEN_LIMITS.get(model_name, _DEFAULT_TOKEN_LIMIT)
 
-    def _build_config(
-        self,
-        *,
-        task_type: Optional[str] = None,
-        title: Optional[str] = None,
-    ) -> types.EmbedContentConfig:
-        """Build EmbedContentConfig, merging per-call overrides with instance defaults."""
-        effective_task_type = task_type or self.task_type
-        kwargs: Dict[str, Any] = {"output_dimensionality": self._dimension}
-        if effective_task_type:
-            kwargs["task_type"] = effective_task_type.upper()
-        if title:
-            kwargs["title"] = title
-        return types.EmbedContentConfig(**kwargs)
-
-    def _resolve_task_type(
-        self,
-        *,
-        is_query: bool = False,
-        task_type: Optional[str] = None,
-    ) -> Optional[str]:
-        if task_type is None:
-            if is_query and self.query_param:
-                task_type = self.query_param
-            elif not is_query and self.document_param:
-                task_type = self.document_param
-        return task_type
-
     def _prepare_request(
         self,
         text: str,
+        is_query: bool = False,
         *,
         task_type: Optional[str] = None,
         title: Optional[str] = None,
     ) -> tuple[str, types.EmbedContentConfig]:
         """Build the model-specific text and request config."""
+        if task_type is None:
+            task_type = self.query_param if is_query else self.document_param
         effective_task_type = task_type or self.task_type
-        if self.model_name != "gemini-embedding-2":
-            return text, self._build_config(task_type=effective_task_type, title=title)
-
-        normalized_task_type = effective_task_type.upper() if effective_task_type else None
-        if normalized_task_type and normalized_task_type not in _VALID_TASK_TYPES:
-            raise ValueError(
-                f"Invalid task_type '{effective_task_type}'. "
-                f"Valid values: {', '.join(sorted(_VALID_TASK_TYPES))}"
-            )
-
-        # Stable Embedding 2 rejects EmbedContentConfig.task_type. Google
-        # documents equivalent text instructions for each supported task.
-        if normalized_task_type == "RETRIEVAL_DOCUMENT" or (normalized_task_type is None and title):
-            text = f"title: {title or 'none'} | text: {text}"
-        elif normalized_task_type:
-            text = _GEMINI_EMBEDDING_2_TASK_PREFIXES[normalized_task_type] + text
-
-        return text, types.EmbedContentConfig(output_dimensionality=self._dimension)
+        task_type = effective_task_type.upper() if effective_task_type else None
+        config = types.EmbedContentConfig(output_dimensionality=self._dimension)
+        if self.model_name == "gemini-embedding-2":
+            if task_type and task_type not in _VALID_TASK_TYPES:
+                raise ValueError(
+                    f"Invalid task_type '{effective_task_type}'. "
+                    f"Valid values: {', '.join(sorted(_VALID_TASK_TYPES))}"
+                )
+            if task_type or title:
+                text = _TASK_INSTRUCTIONS[task_type or "RETRIEVAL_DOCUMENT"].format(
+                    text=text, title=title or "none"
+                )
+        else:
+            config.task_type = task_type
+            config.title = title or None
+        return text, config
 
     def __repr__(self) -> str:
         return (
@@ -238,15 +202,14 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         if not text or not text.strip():
             logger.warning("Empty text passed to embed(), returning zero vector")
             return EmbedResult(dense_vector=[0.0] * self._dimension)
-        task_type = self._resolve_task_type(is_query=is_query, task_type=task_type)
-        request_text, request_config = self._prepare_request(text, task_type=task_type, title=title)
+        text, config = self._prepare_request(text, is_query, task_type=task_type, title=title)
 
         # SDK accepts plain str; converts to REST Parts format internally.
         def _call() -> EmbedResult:
             result = self.client.models.embed_content(
                 model=self.model_name,
-                contents=request_text,
-                config=request_config,
+                contents=text,
+                config=config,
             )
             vector = truncate_and_normalize(list(result.embeddings[0].values), self._dimension)
             return EmbedResult(dense_vector=vector)
@@ -258,7 +221,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 operation_name="Gemini embedding",
             )
             # Estimate token usage
-            estimated_tokens = self._estimate_tokens(request_text)
+            estimated_tokens = self._estimate_tokens(text)
             self.update_token_usage(
                 model_name=self.model_name,
                 provider="gemini",
@@ -282,8 +245,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             logger.warning("Empty text passed to embed_async(), returning zero vector")
             return EmbedResult(dense_vector=[0.0] * self._dimension)
 
-        task_type = self._resolve_task_type(is_query=is_query, task_type=task_type)
-        request_text, request_config = self._prepare_request(text, task_type=task_type, title=title)
+        text, config = self._prepare_request(text, is_query, task_type=task_type, title=title)
 
         async def _call() -> EmbedResult:
             # Keep creation, use and cleanup on the calling event loop.
@@ -292,8 +254,8 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 async with client.aio as async_client:
                     result = await async_client.models.embed_content(
                         model=self.model_name,
-                        contents=request_text,
-                        config=request_config,
+                        contents=text,
+                        config=config,
                     )
             vector = truncate_and_normalize(list(result.embeddings[0].values), self._dimension)
             return EmbedResult(dense_vector=vector)
@@ -304,7 +266,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 logger=logger,
                 operation_name="Gemini async embedding",
             )
-            estimated_tokens = self._estimate_tokens(request_text)
+            estimated_tokens = self._estimate_tokens(text)
             self.update_token_usage(
                 model_name=self.model_name,
                 provider="gemini",
