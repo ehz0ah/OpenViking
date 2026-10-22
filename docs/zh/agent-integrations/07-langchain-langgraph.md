@@ -259,6 +259,7 @@ store.put(("users", "ada"), "preferences", None)  # 值为 None 表示删除该�
 也适用于 `viking://~/peers/support/memories/langgraph_store` 这样的 peer 主目录别名。
 
 `search()` 支持 `filter={"metadata": {"color": "blue"}}` 这样的嵌套 JSON 筛选。
+筛选中的 `eq`、`ne`、`gt`、`gte`、`lt`、`lte` 和 `in` 在所有嵌套层级均为保留的运算符别名。
 使用 `index=["items[*].text"]` 可以只索引数组中的指定字段，同时保留完整的存储值。
 已有条目的索引会在再次写入该条目时更新。
 

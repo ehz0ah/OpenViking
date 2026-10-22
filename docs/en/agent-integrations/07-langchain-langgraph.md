@@ -272,6 +272,7 @@ errors propagate, and `put()` does not overwrite a record after a failed read.
 when `root_uri` uses a peer home alias such as `viking://~/peers/support/memories/langgraph_store`.
 
 `search()` accepts nested JSON filters such as `filter={"metadata": {"color": "blue"}}`.
+Filter keys `eq`, `ne`, `gt`, `gte`, `lt`, `lte` and `in` are reserved operator aliases at every nesting level.
 Use `index=["items[*].text"]` to index selected array fields while retaining the complete
 stored value. Existing index projections are updated when the item is written again.
 
