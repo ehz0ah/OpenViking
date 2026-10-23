@@ -20,8 +20,8 @@ permissions:
 
 jobs:
   build-package:
-    name: Build openviking-agent-framework
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'openviking-agent-framework@')
+    name: Build openviking-ms-agent-framework
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'openviking-ms-agent-framework@')
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -52,7 +52,7 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           PACKAGE_VERSION=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
-          EXPECTED_TAG="openviking-agent-framework@$PACKAGE_VERSION"
+          EXPECTED_TAG="openviking-ms-agent-framework@$PACKAGE_VERSION"
           if [ "$RELEASE_TAG" != "$EXPECTED_TAG" ]; then
             echo "Tag $RELEASE_TAG does not match expected tag $EXPECTED_TAG"
             exit 1
@@ -86,7 +86,7 @@ jobs:
     runs-on: ubuntu-24.04
     environment:
       name: testpypi
-      url: https://test.pypi.org/p/openviking-agent-framework
+      url: https://test.pypi.org/p/openviking-ms-agent-framework
     permissions:
       id-token: write
     steps:
@@ -107,7 +107,7 @@ jobs:
     runs-on: ubuntu-24.04
     environment:
       name: pypi
-      url: https://pypi.org/p/openviking-agent-framework
+      url: https://pypi.org/p/openviking-ms-agent-framework
     permissions:
       id-token: write
     steps:
