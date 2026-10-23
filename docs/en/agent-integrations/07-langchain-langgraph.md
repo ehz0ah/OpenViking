@@ -312,6 +312,13 @@ recorder.flush("support-thread-1")
 recorder.close()
 ```
 
+Pass `commit_policy=` to `record()` or `arecord()` to override the recorder's
+policy for that call without changing its default. `None` uses the default;
+`OpenVikingCommitPolicy(mode="never")` suppresses a new post-write commit, but
+still retries any previously failed commit. `history.clear()` and `aclear()`
+raise if deletion or recreation fails; a failed recreation leaves the old
+session deleted and does not acknowledge pending context references.
+
 `record()` writes only the messages supplied by the caller. It filters framework
 control messages, writes in server-safe batches, and applies the configured
 commit policy. If a later batch or the post-write commit fails,

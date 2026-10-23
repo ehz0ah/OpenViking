@@ -298,6 +298,11 @@ recorder.flush("support-thread-1")
 recorder.close()
 ```
 
+向 `record()` 或 `arecord()` 传入 `commit_policy=` 可仅覆盖本次调用的策略，
+不改变 recorder 的默认值。`None` 使用默认策略；`OpenVikingCommitPolicy(mode="never")`
+禁止本次写入后的新 commit，但仍会重试之前失败的 commit。`history.clear()` 和 `aclear()`
+会在删除或重建失败时抛出异常；重建失败时旧 session 已被删除，待确认的上下文引用不会被确认。
+
 `record()` 只写入调用方传入的消息；它会过滤框架控制消息、按服务端限制分批写入，并应用已配置的
 commit 策略。如果后续批次或写入后的 commit 失败，`OpenVikingPartialWriteError` 会报告已经
 确认写入的输入前缀，调用方可仅重试尚未写入的后缀；空后缀会安全地重试待完成的 commit。

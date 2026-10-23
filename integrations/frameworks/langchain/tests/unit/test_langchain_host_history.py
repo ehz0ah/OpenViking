@@ -294,10 +294,10 @@ async def test_recall_preserves_existing_system_message(
         assert "Deployment uses azure." in observed.content
 
 
-@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("capture_mode", ["sync", "async-sync-client", "async-native-client"])
 @pytest.mark.parametrize("first_commits", [False, True])
 @pytest.mark.asyncio
-async def test_concurrent_capture_hooks_keep_their_commit_policies(asynchronous, first_commits):
+async def test_concurrent_capture_hooks_keep_their_commit_policies(capture_mode, first_commits):
     entered = threading.Event()
     release = threading.Event()
 
@@ -308,13 +308,21 @@ async def test_concurrent_capture_hooks_keep_their_commit_policies(asynchronous,
                 assert release.wait(5), "other session did not finish its capture"
             return super().batch_add_messages(session_id, messages, **kwargs)
 
-    client = PausedClient()
-    middleware = OpenVikingContextMiddleware(client=client, commit_on_after_agent=True)
+    class AsyncPausedClient(NoContextClient):
+        async def batch_add_messages(self, session_id, messages, **kwargs):
+            if session_id == "first":
+                entered.set()
+                assert await asyncio.to_thread(release.wait, 5), "other session did not finish"
+            return super().batch_add_messages(session_id, messages, **kwargs)
+
+    client = AsyncPausedClient() if capture_mode == "async-native-client" else PausedClient()
+    client_kwargs = {"async_client" if capture_mode == "async-native-client" else "client": client}
+    middleware = OpenVikingContextMiddleware(**client_kwargs, commit_on_after_agent=True)
 
     async def capture(session_id, commit):
         name = "after_agent" if commit else "before_model"
         state = {"session_id": session_id, "messages": [HumanMessage(content=session_id)]}
-        if asynchronous:
+        if capture_mode != "sync":
             await getattr(middleware, "a" + name)(state, None)
         else:
             await asyncio.to_thread(getattr(middleware, name), state, None)
