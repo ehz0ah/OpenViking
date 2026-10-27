@@ -128,5 +128,5 @@ boundaries. They require no server, credentials, or model calls. Support belongs
 in [OpenViking issues](https://github.com/volcengine/OpenViking/issues/new/choose).
 
 See the [framework adapter guide](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/README.md) for adding other integrations.
-Package metadata and source headers declare AGPL-3.0; see [LICENSE](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/microsoft-agent-framework/LICENSE).
+The adapter is licensed under MIT; see [LICENSE](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/microsoft-agent-framework/LICENSE).
 The runnable [example](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/microsoft-agent-framework/examples/LICENSE) retains Apache-2.0.
