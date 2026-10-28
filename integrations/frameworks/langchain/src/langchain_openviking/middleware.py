@@ -8,8 +8,9 @@ import asyncio
 import hashlib
 import json
 from contextlib import AbstractContextManager, nullcontext
+from copy import deepcopy
 from dataclasses import dataclass
-from typing import Annotated, Any, Callable
+from typing import Annotated, Any, Callable, TypedDict
 
 try:
     from langchain.agents.middleware import AgentMiddleware
@@ -75,6 +76,11 @@ class _CapturePlan:
     unchanged: bool = False
 
 
+class _PendingContext(TypedDict):
+    delivery_id: str
+    parts: list[dict[str, Any]]
+
+
 class OpenVikingCaptureState(AgentState):
     # Persist delivery IDs in the host checkpointer, independently of message
     # retention, so a compacted tail is not recorded again after a restart.
@@ -82,6 +88,8 @@ class OpenVikingCaptureState(AgentState):
     # Recall is request-only, so keep the exact block separately and replay it
     # onto the same user message when the host rebuilds model-bound history.
     openviking_recall_ledger: Annotated[dict[str, dict[str, str]], PrivateStateAttr]
+    # References are pending only until their assistant message is acknowledged.
+    openviking_pending_context: Annotated[dict[str, _PendingContext], PrivateStateAttr]
 
 
 class OpenVikingContextMiddleware(AgentMiddleware[OpenVikingCaptureState]):
@@ -376,20 +384,40 @@ class OpenVikingContextMiddleware(AgentMiddleware[OpenVikingCaptureState]):
         ledgers = dict(state.get("openviking_recall_ledger") or {})
         scope_key = _stable_json(pending_key)
         ledger = dict(ledgers.get(scope_key) or {})
-        if ledger.get(message_key) == block:
-            return None
-        ledger[message_key] = block
-        while len(ledger) > _RECALL_LEDGER_MAX_ENTRIES:
-            del ledger[next(iter(ledger))]
-        ledgers[scope_key] = ledger
-        return {"openviking_recall_ledger": ledgers}
+        update: dict[str, Any] = {}
+        if ledger.get(message_key) != block:
+            ledger[message_key] = block
+            while len(ledger) > _RECALL_LEDGER_MAX_ENTRIES:
+                del ledger[next(iter(ledger))]
+            ledgers[scope_key] = ledger
+            update["openviking_recall_ledger"] = ledgers
+
+        parts = self._pending_context_parts.get(pending_key)
+        messages = state.get("messages") or []
+        delivery_id = _message_delivery_id(messages[-1]) if messages else None
+        if parts and delivery_id:
+            pending_context = dict(state.get("openviking_pending_context") or {})
+            pending_context[scope_key] = {
+                "delivery_id": delivery_id,
+                "parts": deepcopy(parts),
+            }
+            update["openviking_pending_context"] = pending_context
+        return update or None
 
     def _capture_state_update(
         self, state: OpenVikingCaptureState, plan: _CapturePlan
     ) -> dict[str, Any]:
         delivered = dict(state.get("openviking_captured_message_ids") or {})
         delivered[_stable_json(plan.key)] = sorted(self._captured_message_ids.get(plan.key, set()))
-        return {"openviking_captured_message_ids": delivered}
+        update: dict[str, Any] = {"openviking_captured_message_ids": delivered}
+        pending_context = state.get("openviking_pending_context") or {}
+        scope_key = _stable_json(plan.key)
+        pending = pending_context.get(scope_key)
+        if pending and pending["delivery_id"] in self._captured_message_ids.get(plan.key, set()):
+            pending_context = dict(pending_context)
+            del pending_context[scope_key]
+            update["openviking_pending_context"] = pending_context
+        return {key: value for key, value in update.items() if state.get(key) != value}
 
     def _remember_capture_ids(self, plan: _CapturePlan, end: int | None = None) -> None:
         delivered = self._captured_message_ids.setdefault(plan.key, set())
@@ -412,7 +440,7 @@ class OpenVikingContextMiddleware(AgentMiddleware[OpenVikingCaptureState]):
             with self._actor_peer_scope(plan.actor_peer_id):
                 self.recorder.record(plan.session_id, (), commit_policy=policy)
             self._pending_context_parts.pop(plan.key, None)
-            return None
+            return self._capture_state_update(state, plan) or None
         try:
             with self._actor_peer_scope(plan.actor_peer_id):
                 result = self.recorder.record(
@@ -448,7 +476,7 @@ class OpenVikingContextMiddleware(AgentMiddleware[OpenVikingCaptureState]):
             with self._actor_peer_scope(plan.actor_peer_id):
                 await self.recorder.arecord(plan.session_id, (), commit_policy=policy)
             self._pending_context_parts.pop(plan.key, None)
-            return None
+            return self._capture_state_update(state, plan) or None
         try:
             with self._actor_peer_scope(plan.actor_peer_id):
                 result = await self.recorder.arecord(
@@ -504,6 +532,14 @@ class OpenVikingContextMiddleware(AgentMiddleware[OpenVikingCaptureState]):
             and signatures[: len(previous_signatures)] == previous_signatures
         ):
             start = len(previous_signatures)
+        context_parts = list(self._pending_context_parts.get(key, []))
+        if not context_parts:
+            # Restore references only for their still-uncaptured assistant message.
+            pending = (state.get("openviking_pending_context") or {}).get(_stable_json(key))
+            if pending and any(
+                _message_delivery_id(message) == pending["delivery_id"] for message in messages
+            ):
+                context_parts = list(pending["parts"])
         return _CapturePlan(
             session_id=session_id,
             peer_id=peer_id,
@@ -512,7 +548,7 @@ class OpenVikingContextMiddleware(AgentMiddleware[OpenVikingCaptureState]):
             messages=messages,
             signatures=signatures,
             start=start,
-            context_parts=list(self._pending_context_parts.get(key, [])),
+            context_parts=context_parts,
             unchanged=unchanged,
         )
 

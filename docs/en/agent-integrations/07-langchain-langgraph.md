@@ -298,6 +298,8 @@ internal graph state and replays them with their original messages after later
 turns or a restart. This preserves unchanged prompt prefixes for provider caching;
 actual cache hits depend on the provider. The ledger retains up to 500 entries
 per session/peer scope and follows the application's checkpoint retention policy.
+Pending structured context references are also checkpointed until their assistant
+message is captured, so resuming an interrupted tool loop preserves provenance.
 
 ### Session recorder
 

@@ -2371,9 +2371,10 @@ def test_langgraph_middleware_injects_recall_and_captures_messages(shape, struct
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("capture", [False, True])
+@pytest.mark.parametrize("interrupt_tools", [False, True])
 @pytest.mark.asyncio
 async def test_langgraph_middleware_replays_exact_recall_prefix_after_restart(
-    asynchronous, streaming, capture
+    asynchronous, streaming, capture, interrupt_tools
 ):
     from langchain.agents import create_agent
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -2431,7 +2432,7 @@ async def test_langgraph_middleware_replays_exact_recall_prefix_after_restart(
     checkpointer = InMemorySaver()
     config = {"configurable": {"thread_id": "prefix-session"}}
 
-    def build_agent(model):
+    def build_agent(model, *, pause_before_tools=False):
         return create_agent(
             model,
             tools=[lookup_deployment],
@@ -2446,10 +2447,11 @@ async def test_langgraph_middleware_replays_exact_recall_prefix_after_restart(
                 )
             ],
             checkpointer=checkpointer,
+            interrupt_before=["tools"] if pause_before_tools else None,
         )
 
     async def run(agent, text):
-        payload = {"messages": [{"role": "user", "content": text}]}
+        payload = None if text is None else {"messages": [{"role": "user", "content": text}]}
         if streaming:
             events = (
                 [
@@ -2477,8 +2479,11 @@ async def test_langgraph_middleware_replays_exact_recall_prefix_after_restart(
     agent = build_agent(model)
     for schema in (agent.get_input_schema(), agent.get_output_schema()):
         assert "openviking_recall_ledger" not in schema.model_json_schema().get("properties", {})
+        assert "openviking_pending_context" not in schema.model_json_schema().get("properties", {})
     await run(agent, "first azure deployment prompt")
     client.records["viking://~/memories/profile.md"] = "Azure deployments must use Singapore."
+    if interrupt_tools:
+        agent = build_agent(model, pause_before_tools=True)
     await run(agent, "second azure deployment prompt")
     state = agent.get_state(config).values
 
@@ -2489,13 +2494,31 @@ async def test_langgraph_middleware_replays_exact_recall_prefix_after_restart(
         "second azure deployment prompt",
     ]
     assert sum(len(ledger) for ledger in state["openviking_recall_ledger"].values()) == 2
-    assert len(model.requests) == 4  # Two tool loops, with one recall search per user turn.
+    assert len(model.requests) == (3 if interrupt_tools else 4)
     assert "azure deployments" in model.requests[0][1].content
     assert "Singapore" in model.requests[2][-1].content
 
     # A fresh middleware and graph recover the ledger from the same checkpointer.
     restarted_model = RecordingModel()
     restarted_agent = build_agent(restarted_model)
+    if interrupt_tools:
+        assert agent.get_state(config).next == ("tools",)
+        await run(restarted_agent, None)
+        assert len(client.search_calls) == 2
+        references = [
+            part
+            for message in client.sessions["prefix-session"]
+            for part in message.get("parts", [])
+            if part["type"] == "context"
+        ]
+        assert len(references) == (2 if capture else 0)
+        if capture:
+            assert references[-1] == {
+                "type": "context",
+                "uri": "viking://~/memories/profile.md",
+                "context_type": "memory",
+                "abstract": "Azure deployments must use Singapore.",
+            }
     await run(restarted_agent, "third azure deployment prompt")
     restarted_state = restarted_agent.get_state(config).values
 
@@ -2523,6 +2546,7 @@ async def test_langgraph_middleware_replays_exact_recall_prefix_after_restart(
             "second azure deployment prompt",
             "third azure deployment prompt",
         ]
+        assert not restarted_state.get("openviking_pending_context")
     else:
         assert captured == []
 
