@@ -243,6 +243,7 @@ class OpenVikingContextProvider(ContextProvider):
 def _messages(messages: list[Message], recorded: set[str]) -> list[dict[str, Any]]:
     """Translate native messages without recording injected context or hidden reasoning."""
     calls: dict[str | None, deque[Content]] = {}
+    completed: dict[tuple[str | None, str | None], Content] = {}
     seen: set[str] = set()
     payloads = []
     for message in messages:
@@ -264,15 +265,36 @@ def _messages(messages: list[Message], recorded: set[str]) -> list[dict[str, Any
                 calls.setdefault(content.call_id, deque()).append(content)
             elif content.type == "function_result":
                 pending = calls.get(content.call_id)
+                occurrence_id = content.id or None
+                key = (content.call_id, occurrence_id)
+                settled = completed.get(key)
                 if pending:
-                    # Occurrence IDs disambiguate parallel calls; older results
-                    # without one settle calls in transcript order.
+                    # Prefer exact occurrences; legacy results settle in order.
                     call = next(
-                        (item for item in pending if content.id is None or item.id == content.id),
+                        (
+                            item
+                            for item in pending
+                            if occurrence_id is None or item.id == occurrence_id
+                        ),
                         None,
                     )
+                    # Explicit completed occurrences identify duplicates. IDs
+                    # synthesized for legacy calls can be reused by a new call.
+                    if call is None and (settled is None or not settled.id):
+                        call = next((item for item in pending if not item.id), None)
                     if call is not None:
                         pending.remove(call)
+                        completed[(content.call_id, None)] = call
+                        if call.id:
+                            completed[(content.call_id, call.id)] = call
+                if call is None:
+                    call = settled
+                    if call is None and not pending:
+                        previous = completed.get((content.call_id, None))
+                        if previous is not None and not previous.id:
+                            call = previous
+                if call is not None and occurrence_id is not None:
+                    completed[key] = call
             if already_recorded:
                 continue
             if content.type == "text" and content.text:

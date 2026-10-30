@@ -203,6 +203,147 @@ async def test_tools_keep_calls_and_results_paired(
         assert client.commit_sizes == [len(client.rows)]
 
 
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("restore", [False, True])
+@pytest.mark.parametrize(
+    "history",
+    [
+        pytest.param(
+            [("call", None, "A"), ("result", "a", "A"), ("result", "a", "A")],
+            id="generated-result-id",
+        ),
+        pytest.param(
+            [
+                ("call", None, "A"),
+                ("result", "a", "A"),
+                ("call", None, "B"),
+                ("result", "a", "B"),
+                ("result", "a", "B"),
+            ],
+            id="generated-result-id-reused-by-new-call",
+        ),
+        pytest.param(
+            [("call", "", "A"), ("result", "a", "A"), ("call", "b", "B"), ("result", "", "B")],
+            id="empty-occurrence-is-unidentified",
+        ),
+        pytest.param(
+            [("call", None, "A"), ("result", None, "A"), ("result", None, "A")],
+            id="legacy-duplicate",
+        ),
+        pytest.param(
+            [("call", "a", "A"), ("result", None, "A"), ("result", "a", "A")],
+            id="result-without-occurrence",
+        ),
+        pytest.param(
+            [("call", "a", "A"), ("result", "b", None), ("result", "a", "A")],
+            id="conflicting-occurrence",
+        ),
+        pytest.param(
+            [("call", "a", "A"), ("call", None, "B"), ("result", "b", "B"), ("result", "a", "A")],
+            id="fallback-only-to-unidentified-call",
+        ),
+        pytest.param(
+            [("call", None, "A"), ("call", "b", "B"), ("result", "b", "B"), ("result", "a", "A")],
+            id="exact-before-fallback",
+        ),
+        pytest.param(
+            [
+                ("call", "a", "A"),
+                ("result", "a", "A"),
+                ("call", None, "B"),
+                ("result", "a", "A"),
+                ("result", "b", "B"),
+            ],
+            id="duplicate-does-not-consume-pending-call",
+        ),
+        pytest.param(
+            [
+                ("call", "a", "A"),
+                ("result", "a", "A"),
+                ("call", "b", "B"),
+                ("result", "b", "B"),
+                ("result", "a", "A"),
+                ("result", None, "B"),
+            ],
+            id="duplicate-preserves-latest-completed-call",
+        ),
+        pytest.param(
+            [
+                ("call", "a", "A"),
+                ("result", "a", "A"),
+                ("call", "a", "B"),
+                ("result", "a", "B"),
+                ("result", "a", "B"),
+            ],
+            id="new-pending-call-before-completed-metadata",
+        ),
+        pytest.param(
+            [
+                ("call", None, "A"),
+                ("result", None, "A"),
+                ("result", "a", "A"),
+                ("call", None, "B"),
+                ("result", None, "B"),
+                ("result", "a", "A"),
+            ],
+            id="legacy-duplicate-gains-occurrence",
+        ),
+        pytest.param(
+            [("result", "a", None), ("call", None, "A"), ("result", "a", "A")],
+            id="orphan-does-not-borrow-future-call",
+        ),
+        pytest.param(
+            [
+                ("call", None, "A"),
+                ("result", None, "A"),
+                ("call", None, "A"),
+                ("result", None, "A"),
+            ],
+            id="identical-polling-calls",
+        ),
+    ],
+)
+async def test_tool_history_preserves_pairing_metadata(history, stream, restore):
+    client, provider, _, agent, session = setup()
+    messages = [Message("user", ["Question"], message_id="question")]
+    for i, (kind, occurrence, label) in enumerate(history):
+        content = Content(
+            "function_call" if kind == "call" else "function_result",
+            call_id="call-1",
+            id=occurrence,
+            **(
+                {"name": f"lookup_{label}", "arguments": {"label": label}}
+                if kind == "call"
+                else {"result": f"output-{i}"}
+            ),
+        )
+        messages.append(
+            Message("assistant" if kind == "call" else "tool", [content], message_id=f"history-{i}")
+        )
+    if restore:
+        # Rebuild pairing metadata from acknowledged history in a fresh provider.
+        await agent.run(messages[:-1], session=session)
+        session = AgentSession.from_dict(json.loads(json.dumps(session.to_dict())))
+        provider = OpenVikingContextProvider(client)
+        agent = Agent(ChatClient(), context_providers=[provider])
+    if stream:
+        async with agent.run(messages, session=session, stream=True) as response:
+            async for _ in response:
+                pass
+    else:
+        await agent.run(messages, session=session)
+    completed = [
+        p for row in client.rows for p in row["parts"] if p.get("tool_status") == "completed"
+    ]
+    expected = [(i, label) for i, (kind, _, label) in enumerate(history) if kind == "result"]
+    assert [(p["tool_name"], p["tool_input"], p["tool_output"]) for p in completed] == [
+        (f"lookup_{label}" if label else "", {"label": label} if label else None, f"output-{i}")
+        for i, label in expected
+    ]
+    ids = [row["source_message_ids"][0] for row in client.rows]
+    assert len(ids) == len(set(ids))
+
+
 @pytest.mark.parametrize("complete", [False, True])
 @pytest.mark.parametrize("commit_policy", ["never", "always", "pending_tokens"])
 async def test_stream_capture_requires_complete_consumption(complete, commit_policy):
