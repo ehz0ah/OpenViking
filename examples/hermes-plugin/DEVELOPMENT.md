@@ -33,6 +33,21 @@ and imported profiles, routed profiles, missing host binding, cold startup,
 retained-provider recovery and concurrent local embeddings. Preserve the
 Windows installation check and reviewed native package pins.
 
+Release gate: do not merge or publish 2.2 until MCP launch-time profile binding
+is available in a released upstream Hermes version. If the host release slips,
+this plugin release slips too. The fork host in CI is temporary development
+evidence. Replace it with the reviewed upstream commit and update the Hermes
+minimum to the release that includes binding. Repeat installation, configured
+stdio launch, missing-home refusal and approval checks on that release.
+
+MCP capture is opt-in by tool name. Only reviewed `remember`, `write`, `edit`
+and `forget` acknowledgements enter the capture batch. Review both the inputs
+and results before adding a tool to this set. A read-only annotation controls
+approval and does not authorize memory capture. Unknown tools and all privacy
+tools remain excluded even when the server adds them without a plugin release.
+The adapter process test removes `HERMES_HOME` and asserts the stderr message
+and exit status before provider imports or network requests.
+
 The active-session commit lifecycle was ported from
 [KoNit-K's Hermes PR #112533](https://github.com/NousResearch/hermes-agent/pull/112533),
 with the original author retained. The OpenViking adaptation uses a configurable

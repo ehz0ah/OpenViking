@@ -23,6 +23,7 @@ def mcp_server(
     health_status=200,
     health_payload=None,
     health_auth=False,
+    mcp_status=200,
 ):
     requests = []
     entered, release = threading.Event(), threading.Event()
@@ -90,6 +91,8 @@ def mcp_server(
             self.respond({"status": "ok", "result": {"user": "alice"}})
 
         def do_POST(self):
+            if mcp_status != 200:
+                return self.respond({"error": "synthetic private diagnostic"}, mcp_status)
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests.append((self.path, dict(self.headers), body))
             if "id" not in body:
@@ -406,32 +409,142 @@ def test_authenticated_health_challenge_keeps_existing_hosted_server_support(ext
         "mcp__openviking__glob",
         "viking_search",
         "mcp_openviking_search",
+        "mcp__openviking__privacy_resolve",
+        "mcp__openviking__privacy_tree",
+        "mcp__openviking__privacy_upsert",
+        "mcp__openviking__download",
+        "mcp__openviking__future_tool",
+        "mcp_openviking_privacy_resolve",
+        "mcp_openviking_download",
+        "mcp_openviking_future_tool",
+        "mcp__other__privacy_resolve",
+        "mcp_other_search",
     ],
 )
-def test_retrieved_content_is_not_captured_again(external_provider, name):
+@pytest.mark.parametrize("named_result", [True, False])
+def test_retrieved_content_is_not_captured_again(external_provider, name, named_result):
     _, provider, _, _ = external_provider("mcp-filter")
     messages = [
         {"role": "user", "content": "My new preference"},
         {
             "role": "assistant",
             "tool_calls": [
-                {"id": "lookup", "type": "function", "function": {"name": name, "arguments": "{}"}}
+                {
+                    "id": "lookup",
+                    "type": "function",
+                    "function": {"name": name, "arguments": '{"reference":"PRIVATE_TOOL_INPUT"}'},
+                }
             ],
         },
-        {"role": "tool", "tool_call_id": "lookup", "name": name, "content": "OLD RETRIEVED MEMORY"},
+        {
+            "role": "tool",
+            "tool_call_id": "lookup",
+            "content": "OLD RETRIEVED MEMORY",
+            **({"name": name} if named_result else {}),
+        },
         {"role": "assistant", "content": "Acknowledged"},
     ]
     batch = provider._messages_to_openviking_batch(messages)
     assert "OLD RETRIEVED MEMORY" not in json.dumps(batch)
+    assert "PRIVATE_TOOL_INPUT" not in json.dumps(batch)
     assert "My new preference" in json.dumps(batch)
 
 
+@pytest.mark.parametrize("tool", ["remember", "write", "edit", "forget"])
+@pytest.mark.parametrize("prefix", ["mcp__openviking__", "mcp_openviking_"])
+def test_reviewed_mcp_mutation_acknowledgements_are_captured(external_provider, tool, prefix):
+    _, provider, _, _ = external_provider("mcp-mutation-capture")
+    name = prefix + tool
+    messages = [
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "mutation", "function": {"name": name, "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "mutation", "content": "Mutation acknowledged"},
+    ]
+    parts = provider._messages_to_openviking_batch(messages)[0]["parts"]
+    assert parts[0]["tool_name"] == name
+    assert parts[0]["tool_output"] == "Mutation acknowledged"
+
+
+@pytest.mark.parametrize("named_result", [True, False])
+def test_deferred_mcp_wrapper_does_not_capture_private_result(external_provider, named_result):
+    _, provider, _, _ = external_provider("mcp-deferred-capture")
+    messages = [
+        {"role": "user", "content": "Use the saved credential"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "private",
+                    "function": {
+                        "name": "tool_call",
+                        "arguments": json.dumps(
+                            {
+                                "calls": [
+                                    {
+                                        "name": "mcp__openviking__privacy_resolve",
+                                        "arguments": {"reference": "PRIVATE_REFERENCE"},
+                                    }
+                                ]
+                            }
+                        ),
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "private",
+            "content": "SYNTHETIC_SECRET",
+            **({"name": "tool_call"} if named_result else {}),
+        },
+    ]
+    batch = json.dumps(provider._messages_to_openviking_batch(messages))
+    assert "SYNTHETIC_SECRET" not in batch
+    assert "PRIVATE_REFERENCE" not in batch
+    assert "Use the saved credential" in batch
+
+
 @pytest.mark.parametrize(
-    "name", ["mcp__openviking__remember", "mcp__openviking__write", "mcp_other_search"]
+    "version,supported", [("0.4.22", False), ("0.4.23", True), ("0.5.0", True)]
+)
+def test_setup_enforces_mcp_server_minimum(external_provider, version, supported):
+    home, _, module, _ = external_provider("mcp-server-version")
+    adapter = importlib.import_module(module.__name__ + ".mcp_tools")
+    with mcp_server(health_payload={"status": "ok", "healthy": True, "version": version}) as (
+        endpoint,
+        requests,
+        *_,
+    ):
+        configure_home(home, endpoint)
+        before = (home / "config.yaml").read_bytes()
+        ok, message = adapter.validate_connection(module, {"endpoint": endpoint})
+        assert ok is supported
+        assert (home / "config.yaml").read_bytes() == before
+        if not supported:
+            assert "OpenViking >=0.4.23" in message and "/mcp" in message
+            assert [path for path, _, _ in requests] == ["/health"]
+
+
+@pytest.mark.parametrize("status", [404, 405])
+def test_missing_mcp_endpoint_reports_required_server(external_provider, status):
+    home, _, module, _ = external_provider("mcp-missing-endpoint")
+    adapter = importlib.import_module(module.__name__ + ".mcp_tools")
+    with mcp_server(mcp_status=status) as (endpoint, *_):
+        configure_home(home, endpoint)
+        ok, message = adapter.validate_connection(module, {"endpoint": endpoint})
+        assert not ok
+        assert "OpenViking >=0.4.23" in message and "/mcp" in message
+        assert "synthetic private diagnostic" not in message
+
+
+@pytest.mark.parametrize(
+    "name", ["mcp__openviking__remember", "mcp__openviking__write", "ordinary_tool"]
 )
 def test_write_results_and_other_servers_are_not_misclassified(external_provider, name):
     _, _, module, _ = external_provider("mcp-other")
-    assert not module._is_openviking_recall_tool_name(name)
+    assert not module._skip_tool_capture(name)
 
 
 def test_timed_out_write_is_not_replayed(external_provider):

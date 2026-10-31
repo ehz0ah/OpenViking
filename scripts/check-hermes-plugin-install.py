@@ -109,12 +109,26 @@ def check(host, repository, root, timeout, *, install_only=False):
                 repository / "examples/hermes-plugin" / name
             ).read_text(encoding="utf-8"):
                 raise RuntimeError("Installed plugin differs from the checked-out source: " + name)
+        unbound_env = dict(env)
+        unbound_env.pop("HERMES_HOME")
+        refused = subprocess.run(
+            [sys.executable, str(installed / "mcp_tools.py"), "--profile-bound"],
+            cwd=host, env=unbound_env, capture_output=True, text=True, timeout=timeout,
+        )
+        (root / "unbound-launch.log").write_text(refused.stderr, encoding="utf-8")
+        if (
+            refused.returncode != 1
+            or refused.stdout
+            or "Hermes did not supply the MCP profile home" not in refused.stderr
+        ):
+            raise RuntimeError("Unbound MCP launch was not refused clearly")
         if install_only:
             evidence = {
                 "installed": True,
                 "enabled": False,
                 "home": str(home),
                 "source_ref": ref,
+                "unbound_mcp_launch_refused": True,
             }
             (root / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
             print(json.dumps(evidence))
@@ -186,6 +200,7 @@ print(json.dumps({"installed": True, "enabled": True, "external_module": type(pr
             )
         evidence = json.loads(result.strip().splitlines()[-1])
         evidence["source_ref"] = ref
+        evidence["unbound_mcp_launch_refused"] = True
         (root / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
         print(json.dumps(evidence))
     finally:

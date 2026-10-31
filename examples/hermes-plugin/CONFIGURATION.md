@@ -91,6 +91,10 @@ Routed profiles never inherit the launch profile's process values.
 
 OpenViking 0.4.23 or newer with its `/mcp` endpoint is required for MCP tools.
 This version adds the read-only annotations used by Hermes's approval policy.
+For an enabled MCP connection, setup checks the server version and `/mcp`
+access before saving it.
+An older server or an unavailable MCP endpoint produces a requirement error.
+Upgrade your server or enable `/mcp` before upgrading the plugin to 2.2.
 
 | Environment variable | Default | Description |
 |---------|---------|-------------|
@@ -315,6 +319,14 @@ MCP tools are separate from Hermes's `memory` toolset. Disabling that toolset
 does not disable MCP. Use `hermes tools`, disable the OpenViking MCP entry or
 configure its tool filter to control explicit tools.
 
+Conversation capture includes MCP calls and results only for the reviewed
+OpenViking `remember`, `write`, `edit` and `forget` acknowledgements. All other
+MCP calls and results are excluded, including privacy tools, download URLs,
+retrieval tools, other servers and newly added tools. Changing tool approval
+or enabling a tool does not opt its result into memory extraction.
+Deferred `tool_call` wrapper calls and results are also excluded; they can
+contain private results from an underlying MCP tool.
+
 ## Memory writes and deletes
 
 The MCP `remember` tool accepts messages for OpenViking to extract memories.
@@ -451,6 +463,11 @@ hermes plugins install 'volcengine/OpenViking/examples/hermes-plugin' \
 
 Connection settings and server data are retained. Restart Hermes or the gateway
 after updating.
+
+Version 2.2 requires OpenViking >=0.4.23 with `/mcp` enabled and a released
+Hermes version that supplies launch-time MCP profile binding. The six native
+`viking_*` tools are removed. The plugin release waits for that Hermes release;
+it does not provide a native-tool fallback.
 
 ## Recovery lock files
 

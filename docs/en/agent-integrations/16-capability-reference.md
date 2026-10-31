@@ -723,7 +723,7 @@ Plugin 2.2 uses `mcp__openviking__<tool>` and requires OpenViking 0.4.23 or newe
 New connections use untrusted policy. Read-only tools run without approval;
 other tools require approval. The adapter uses launch-time profile binding and
 requires the corresponding Hermes host support. Restart after upgrading.
-See the [plugin configuration](../../../examples/hermes-plugin/CONFIGURATION.md#mcp-tools).
+See the [plugin configuration](https://github.com/volcengine/OpenViking/blob/main/examples/hermes-plugin/CONFIGURATION.md#mcp-tools).
 
 Behavior of the pinned bundled provider:
 

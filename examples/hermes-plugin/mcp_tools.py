@@ -16,6 +16,7 @@ from builtins import BaseExceptionGroup
 from pathlib import Path
 
 SERVER_NAME = "openviking"
+MCP_REQUIREMENT = "OpenViking MCP tools require OpenViking >=0.4.23 with /mcp enabled."
 _BOUND_ARGS = ["openviking", "mcp", "--profile-bound"]
 _ENV_KEYS = tuple(
     f"OPENVIKING_{key}"
@@ -54,6 +55,10 @@ class _UnverifiedServerError(RuntimeError):
     pass
 
 
+class _UnsupportedMCPServerError(RuntimeError):
+    pass
+
+
 def _leaf_error(exc):
     while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
         exc = exc.exceptions[0]
@@ -89,6 +94,8 @@ def _tls_error(exc):
 def _error_hint(exc):
     import httpx2
 
+    if any(isinstance(error, _UnsupportedMCPServerError) for error in _error_chain(exc)):
+        return MCP_REQUIREMENT + " Upgrade the server before upgrading the plugin."
     if any(isinstance(error, _UnverifiedServerError) for error in _error_chain(exc)):
         return "The endpoint did not identify itself as OpenViking. Check the server URL."
     statuses = {
@@ -105,6 +112,8 @@ def _error_hint(exc):
         return "OpenViking authentication failed. Check the API key and gateway headers."
     if 403 in statuses:
         return "OpenViking access was denied. Check the API key, gateway headers and access permissions."
+    if statuses & {404, 405}:
+        return MCP_REQUIREMENT + " Check the server version and MCP endpoint access."
     if _tls_error(exc):
         return "TLS verification failed. Check SSL_CERT_FILE, SSL_CERT_DIR or ssl_verify."
     if any(isinstance(error, FileNotFoundError) for error in _error_chain(exc)):
@@ -115,7 +124,10 @@ def _error_hint(exc):
         isinstance(error, (TimeoutError, httpx2.TimeoutException)) for error in _error_chain(exc)
     ):
         return "The request timed out. Check the server and the configured timeout."
-    return f"Request failed ({type(_leaf_error(exc)).__name__}). Check the server and its /mcp endpoint."
+    return (
+        f"Request failed ({type(_leaf_error(exc)).__name__}). "
+        f"{MCP_REQUIREMENT} Check the server and its MCP endpoint."
+    )
 
 
 def configure(config: dict, hermes_home: str) -> None:
@@ -328,6 +340,14 @@ async def _request(ov, values, entry, method, params, *, managed=False):
             health = rest._parse_response(response)
         if not ov._is_modern_openviking_health(health):
             raise _UnverifiedServerError()
+        from packaging.version import InvalidVersion, Version
+
+        try:
+            supported = Version(health["version"]) >= Version("0.4.23")
+        except InvalidVersion:
+            supported = False
+        if not supported:
+            raise _UnsupportedMCPServerError()
         response = await http.get(values["endpoint"] + "/api/v1/system/status", headers=headers)
         try:
             rest._parse_response(response)
@@ -438,3 +458,11 @@ def run(args):
         if os.environ.get(key) == "${" + key + "}":
             os.environ.pop(key)
     asyncio.run(serve(Path(raw_home).resolve()))
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--profile-bound", action="store_true")
+    run(parser.parse_args())

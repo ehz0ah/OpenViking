@@ -3,6 +3,9 @@
 import argparse
 import importlib
 import json
+import os
+import subprocess
+import sys
 
 import pytest
 
@@ -71,3 +74,28 @@ def test_new_entry_and_legacy_migration_preserve_profile_policy(external_provide
     for key in ("trust", "enabled", "tools", "headers"):
         assert saved[key] == entry[key]
     assert adapter.repair_profile_home(home) is None
+
+
+def test_adapter_process_refuses_missing_profile_home(external_provider, tmp_path):
+    _, _, module, _ = external_provider("launch-process")
+    adapter = importlib.import_module(module.__name__ + ".mcp_tools")
+    # Deliberately omit HERMES_HOME. The guard must run in the child process
+    # before provider imports or HTTP, under the actual adapter entry point.
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key in {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP"}
+    }
+    env.update(HOME=str(tmp_path), USERPROFILE=str(tmp_path))
+    result = subprocess.run(
+        [sys.executable, adapter.__file__, "--profile-bound"],
+        env=env,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "Hermes did not supply the MCP profile home" in result.stderr
+    assert "Traceback" not in result.stderr

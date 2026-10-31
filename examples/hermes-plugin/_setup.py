@@ -521,6 +521,9 @@ def run_setup(hermes_home: str, config: dict) -> None:
     provider_config = memory_config.get("openviking", {}) if isinstance(memory_config, dict) else {}
     provider_config = provider_config if isinstance(provider_config, dict) else {}
     print("\n  OpenViking memory setup\n")
+    from .mcp_tools import MCP_REQUIREMENT
+
+    _say(MCP_REQUIREMENT)
     usage_profile = _select_usage_profile(_curses_select, _CANCELLED, provider_config)
     if usage_profile is _SETUP_CANCELLED:
         _print_cancelled_setup()

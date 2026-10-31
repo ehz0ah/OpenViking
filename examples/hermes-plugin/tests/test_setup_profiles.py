@@ -97,6 +97,7 @@ def test_setup_persists_preset_and_real_gateway_session_boundaries(
     finally:
         reset_hermes_home_override(token)
     output = capsys.readouterr().out
+    assert "OpenViking >=0.4.23 with /mcp enabled" in output
     assert ("Personal recall enabled. Conversation-sharing settings are unchanged." in output) == (
         profile == "personal"
     )
