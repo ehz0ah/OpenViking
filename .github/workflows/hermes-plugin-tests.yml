@@ -91,9 +91,6 @@ jobs:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, windows-2025]
         host: [main]
         include:
-          - os: windows-2025
-            host: main
-            hermes_ref: bb706e92c775b6a16765b3249a6fdd0427e7430c
           - os: ubuntu-24.04
             host: release
             python: '3.13'
@@ -161,7 +158,7 @@ jobs:
       - name: Check real plugin installation on Windows
         if: runner.os == 'Windows'
         run: |
-          uv run --no-sync python "$GITHUB_WORKSPACE/scripts/check-hermes-plugin-install.py" \
+          "$HERMES_PYTHON" "$GITHUB_WORKSPACE/scripts/check-hermes-plugin-install.py" \
             --hermes-root "$PWD" \
             --output-dir "$RUNNER_TEMP/hermes-plugin-install" \
             --install-only
