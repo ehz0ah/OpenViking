@@ -27,7 +27,7 @@ def plugin_modules(external_provider, monkeypatch):
     monkeypatch.setattr(quick_local, "_validate_vlm", MagicMock())
     packages = importlib.import_module(openviking_module.__name__ + ".local_packages")
     monkeypatch.setattr(
-        packages, "resolve_server_requirement", lambda **_kw: "openviking[local-embed]==0.4.23"
+        packages, "resolve_server_requirement", lambda **_kw: "openviking[local-embed]==0.5.0"
     )
 
 
@@ -152,21 +152,29 @@ def test_resolve_vlm_maps_anthropic_transport(monkeypatch):
 def test_resolve_vlm_normalizes_only_anthropic_version_suffix(monkeypatch, suffix):
     from hermes_cli import config, runtime_provider
 
-    monkeypatch.setattr(config, "load_config", lambda: {
-        "model": {"provider": "custom:gateway", "default": "claude-test"}
-    })
+    monkeypatch.setattr(
+        config,
+        "load_config",
+        lambda: {"model": {"provider": "custom:gateway", "default": "claude-test"}},
+    )
     runtime = {
-        "provider": "custom", "api_mode": "anthropic_messages",
+        "provider": "custom",
+        "api_mode": "anthropic_messages",
         "base_url": "https://gateway.example" + suffix,
-        "api_key": "static-proxy-key", "source": "custom_provider:gateway",
+        "api_key": "static-proxy-key",
+        "source": "custom_provider:gateway",
     }
     monkeypatch.setattr(runtime_provider, "resolve_runtime_provider", lambda **_: runtime)
-    assert quick_local.resolve_hermes_vlm_config()["api_base"] == "https://gateway.example/anthropic"
+    assert (
+        quick_local.resolve_hermes_vlm_config()["api_base"] == "https://gateway.example/anthropic"
+    )
     runtime["api_mode"] = "chat_completions"
     assert quick_local.resolve_hermes_vlm_config()["api_base"] == runtime["base_url"]
 
 
-@pytest.mark.parametrize("credential", ["eyJ-test-only", "cc-test-only", "sk-ant-oat01-test", "sk-ant-setup-test"])
+@pytest.mark.parametrize(
+    "credential", ["eyJ-test-only", "cc-test-only", "sk-ant-oat01-test", "sk-ant-setup-test"]
+)
 @pytest.mark.parametrize("declared", [False, True])
 def test_real_resolver_rejects_native_anthropic_oauth_before_declared_key(
     external_provider, credential, declared
@@ -190,18 +198,35 @@ def test_real_resolver_rejects_native_anthropic_oauth_before_declared_key(
         reset_hermes_home_override(home_token)
 
 
-@pytest.mark.parametrize("base", ["https://api.anthropic.com/v1", "https://proxy.example/anthropic/v1"])
-@pytest.mark.parametrize("credential", ["eyJ-test-only", "cc-test-only", "sk-ant-api03-static-test"])
-def test_anthropic_credentials_follow_route_identity_before_declared_key(monkeypatch, base, credential):
+@pytest.mark.parametrize(
+    "base", ["https://api.anthropic.com/v1", "https://proxy.example/anthropic/v1"]
+)
+@pytest.mark.parametrize(
+    "credential", ["eyJ-test-only", "cc-test-only", "sk-ant-api03-static-test"]
+)
+def test_anthropic_credentials_follow_route_identity_before_declared_key(
+    monkeypatch, base, credential
+):
     from hermes_cli import config, runtime_provider
 
-    monkeypatch.setattr(config, "load_config", lambda: {
-        "model": {"provider": "custom:proxy", "default": "claude-test", "key_env": "PROXY_KEY"}
-    })
-    monkeypatch.setattr(runtime_provider, "resolve_runtime_provider", lambda **_: {
-        "provider": "custom", "api_mode": "anthropic_messages", "base_url": base,
-        "api_key": credential, "source": "env:PROXY_KEY",
-    })
+    monkeypatch.setattr(
+        config,
+        "load_config",
+        lambda: {
+            "model": {"provider": "custom:proxy", "default": "claude-test", "key_env": "PROXY_KEY"}
+        },
+    )
+    monkeypatch.setattr(
+        runtime_provider,
+        "resolve_runtime_provider",
+        lambda **_: {
+            "provider": "custom",
+            "api_mode": "anthropic_messages",
+            "base_url": base,
+            "api_key": credential,
+            "source": "env:PROXY_KEY",
+        },
+    )
     if "api.anthropic.com" in base and not credential.startswith("sk-ant-api"):
         with pytest.raises(quick_local.QuickLocalSetupError, match="cannot be copied safely"):
             quick_local.resolve_hermes_vlm_config()
@@ -211,23 +236,44 @@ def test_anthropic_credentials_follow_route_identity_before_declared_key(monkeyp
 
 def test_resolve_vlm_accepts_declared_model_key_env(monkeypatch):
     from hermes_cli import auth, config, runtime_provider
+
     saved = {"model": {"provider": "lmstudio", "default": "local-model", "key_env": "TEST_LLM_KEY"}}
     monkeypatch.setattr(config, "load_config", lambda: saved)
-    monkeypatch.setattr(config, "get_env_value_prefer_dotenv", lambda name: "static-test-key" if name == "TEST_LLM_KEY" else "")
-    key, source = auth._resolve_api_key_provider_secret("lmstudio", auth.PROVIDER_REGISTRY["lmstudio"])
-    monkeypatch.setattr(runtime_provider, "resolve_runtime_provider", lambda **_kwargs: {
-        "provider": "lmstudio", "source": source, "api_key": key,
-        "base_url": "http://127.0.0.1:1234/v1", "api_mode": "chat_completions"})
+    monkeypatch.setattr(
+        config,
+        "get_env_value_prefer_dotenv",
+        lambda name: "static-test-key" if name == "TEST_LLM_KEY" else "",
+    )
+    key, source = auth._resolve_api_key_provider_secret(
+        "lmstudio", auth.PROVIDER_REGISTRY["lmstudio"]
+    )
+    monkeypatch.setattr(
+        runtime_provider,
+        "resolve_runtime_provider",
+        lambda **_kwargs: {
+            "provider": "lmstudio",
+            "source": source,
+            "api_key": key,
+            "base_url": "http://127.0.0.1:1234/v1",
+            "api_mode": "chat_completions",
+        },
+    )
     assert quick_local.resolve_hermes_vlm_config()["api_key"] == "static-test-key"
 
 
 @pytest.mark.parametrize("key", ["", "local-static-key"])
 def test_resolve_vlm_accepts_hermes_local_runtime(monkeypatch, key):
     from hermes_cli import config, runtime_provider, runtime_provider_custom
+
     endpoint = pytest.importorskip("hermes_cli.local_runtime.endpoint")
-    monkeypatch.setattr(config, "load_config", lambda: {"model": {"default": "local-model", "provider": "llamacpp"}})
-    monkeypatch.setattr(endpoint, "resolve_llamacpp_endpoint", lambda **_kwargs: {
-        "base_url": "http://127.0.0.1:8090/v1", "api_key": key})
+    monkeypatch.setattr(
+        config, "load_config", lambda: {"model": {"default": "local-model", "provider": "llamacpp"}}
+    )
+    monkeypatch.setattr(
+        endpoint,
+        "resolve_llamacpp_endpoint",
+        lambda **_kwargs: {"base_url": "http://127.0.0.1:8090/v1", "api_key": key},
+    )
     runtime = runtime_provider_custom._resolve_llamacpp_runtime("llamacpp", None)
     monkeypatch.setattr(runtime_provider, "resolve_runtime_provider", lambda **_kwargs: runtime)
     assert quick_local.resolve_hermes_vlm_config()["api_key"] == (key or "no-key-required")
@@ -438,12 +484,15 @@ def test_existing_openviking_without_local_embedding_runtime_is_not_reused(
     assert "import llama_cpp" in run.call_args.args[0][2]
 
 
-@pytest.mark.parametrize("version, compatible", [("0.4.22", False), ("0.4.23", True), ("0.4.24", True), ("0.5.0", False)])
-def test_existing_local_runtime_meets_mcp_server_requirement(
+@pytest.mark.parametrize(
+    ("version", "reusable"),
+    [("0.4.22", False), ("0.4.23", False), ("0.5.0", True), ("0.6.0", False)],
+)
+def test_only_supported_openviking_with_local_embedding_runtime_is_reused(
     tmp_path,
     monkeypatch,
     version,
-    compatible,
+    reusable,
 ):
     paths = quick_local.managed_paths(tmp_path)
     paths.runtime_python.parent.mkdir(parents=True)
@@ -459,7 +508,7 @@ def test_existing_local_runtime_meets_mcp_server_requirement(
         ),
     )
 
-    assert quick_local.openviking_install_satisfies_requirement(paths) is compatible
+    assert quick_local.openviking_install_satisfies_requirement(paths) is reusable
 
 
 def test_validation_server_does_not_inherit_stdin(tmp_path, monkeypatch):
@@ -935,8 +984,14 @@ def test_reuse_authenticates_profile_key(tmp_path, monkeypatch, mode, code, acce
         if request.url.path == "/health":
             assert "X-API-Key" not in request.headers
             return httpx.Response(
-                200, json={"status": "ok", "healthy": True, "version": "0.4.23",
-                           "auth_mode": mode, "root_api_key_required": True}
+                200,
+                json={
+                    "status": "ok",
+                    "healthy": True,
+                    "version": "0.5.0",
+                    "auth_mode": mode,
+                    "root_api_key_required": True,
+                },
             )
         assert request.url.path == "/api/v1/admin/accounts"
         assert request.headers["X-API-Key"] == "local-test-key"
@@ -950,14 +1005,17 @@ def test_reuse_authenticates_profile_key(tmp_path, monkeypatch, mode, code, acce
     assert len(requests) == (1 if mode == "dev" else 2)
 
 
-@pytest.mark.parametrize("health_status,health_fields", [
-    (401, {"status": "ok", "healthy": True, "version": "0.4.23"}),
-    (403, {"status": "ok", "healthy": True, "version": "0.4.23"}),
-    (302, {"status": "ok", "healthy": True, "version": "0.4.23"}),
-    (200, {}),
-    (200, {"status": "ok", "healthy": False, "version": "0.4.23"}),
-    (200, {"status": "ok", "healthy": True, "version": ""}),
-])
+@pytest.mark.parametrize(
+    "health_status,health_fields",
+    [
+        (401, {"status": "ok", "healthy": True, "version": "0.5.0"}),
+        (403, {"status": "ok", "healthy": True, "version": "0.5.0"}),
+        (302, {"status": "ok", "healthy": True, "version": "0.5.0"}),
+        (200, {}),
+        (200, {"status": "ok", "healthy": False, "version": "0.5.0"}),
+        (200, {"status": "ok", "healthy": True, "version": ""}),
+    ],
+)
 def test_ownership_probe_requires_successful_openviking_health(
     tmp_path, monkeypatch, health_status, health_fields
 ):
@@ -966,9 +1024,14 @@ def test_ownership_probe_requires_successful_openviking_health(
 
     def respond(request):
         requests.append(request)
-        return httpx.Response(health_status, json={
-            "auth_mode": "trusted", "root_api_key_required": True, **health_fields,
-        })
+        return httpx.Response(
+            health_status,
+            json={
+                "auth_mode": "trusted",
+                "root_api_key_required": True,
+                **health_fields,
+            },
+        )
 
     client = httpx.Client
     monkeypatch.setattr(
@@ -1009,6 +1072,8 @@ def test_current_installer_uses_pm_and_private_root(tmp_path, monkeypatch):
         explicit=True,
         timeout=1800,
     )
+    assert paths.runtime_validation_pending_marker.is_file()
+    assert not paths.restart_required_marker.exists()
 
 
 def test_pm_failure_does_not_activate_profile(tmp_path, monkeypatch):
@@ -1052,8 +1117,11 @@ def test_setup_checks_new_release_even_with_a_compatible_installed_runtime(tmp_p
     paths = quick_local.managed_paths(tmp_path)
     paths.root.mkdir()
     requirements = packages.install_requirements()
-    requirements[0] = "openviking[local-embed]==0.4.22"
+    requirements[0] = "openviking[local-embed]==0.5.0"
     (paths.root / "runtime-requirements.json").write_text(json.dumps(requirements))
+    monkeypatch.setattr(
+        packages, "resolve_server_requirement", lambda **_kw: "openviking[local-embed]==0.5.1"
+    )
     monkeypatch.setattr(quick_local, "openviking_install_satisfies_requirement", lambda _p: True)
     monkeypatch.setattr(packages, "verified_requirements", lambda values, _cache: values)
     install = MagicMock()
@@ -1061,9 +1129,9 @@ def test_setup_checks_new_release_even_with_a_compatible_installed_runtime(tmp_p
 
     engine = quick_local.QuickLocalSetup(health_check=lambda _url: (False, ""))
     assert engine._ensure_openviking_installed(paths) is True
-    assert install.call_args.args[1][0] == "openviking[local-embed]==0.4.23"
+    assert install.call_args.args[1][0] == "openviking[local-embed]==0.5.1"
     assert json.loads((paths.root / "runtime-requirements.json").read_text())[0] == (
-        "openviking[local-embed]==0.4.23"
+        "openviking[local-embed]==0.5.1"
     )
 
 
@@ -1074,7 +1142,8 @@ def test_release_check_failure_preserves_runtime_receipt(tmp_path, monkeypatch):
     receipt = paths.root / "runtime-requirements.json"
     receipt.write_text('["previous requirements"]')
     monkeypatch.setattr(
-        packages, "resolve_server_requirement",
+        packages,
+        "resolve_server_requirement",
         MagicMock(side_effect=quick_local.QuickLocalSetupError("PyPI unavailable")),
     )
     run = MagicMock()

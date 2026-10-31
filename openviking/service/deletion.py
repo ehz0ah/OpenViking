@@ -16,7 +16,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service.task_store import SYSTEM_TASK_ACCOUNT_ID, SYSTEM_TASK_USER_ID
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
 from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher, run_to_completion
-from openviking.service.task_work_index import extract_task_metadata
+from openviking.service.task_work_index import bind_task_context, extract_task_metadata
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
 from openviking.storage.viking_fs import LS_ALL_NODES
@@ -71,18 +71,25 @@ class DeletionService:
         oauth_store: Any = None,
         usage_audit_runtime: Any = None,
         gateway_app: Any = None,
+        require_registered_identity: bool = True,
     ) -> None:
         self._service = service
         self._manager = manager
         self._service_loop = service_loop
+        self._manager_dispatcher = OwnerLoopDispatcher(service_loop)
         self._oauth_store = oauth_store
         self._usage_audit_runtime = usage_audit_runtime
         self._gateway_app = gateway_app
+        self._require_registered_identity = require_registered_identity
         self._request_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         """Bind the queue consumer and reconcile persisted deletion fences."""
         self._service.viking_fs.set_deletion_guard(self._is_deleting)
+        creation_guard = (
+            self._creation_blocked if self._require_registered_identity else self._is_deleting
+        )
+        get_task_tracker().set_deletion_guard(creation_guard)
         queue_manager = self._service._queue_manager
         queue = queue_manager.get_queue(queue_manager.DATA_CLEANUP)
         queued_task_ids = {
@@ -115,19 +122,32 @@ class DeletionService:
             if task.status in (TaskStatus.PENDING, TaskStatus.RUNNING) and task_id not in (
                 queued_task_ids
             ):
-                await queue.enqueue(
-                    _deletion_message(
-                        task_id=task_id,
-                        owner_account_id=owner_account_id,
-                        owner_user_id=owner_user_id,
-                        target_account_id=account_id,
-                        target_user_id=user_id,
+                with bind_task_context(task_id, owner_account_id, owner_user_id):
+                    await queue.enqueue(
+                        _deletion_message(
+                            task_id=task_id,
+                            owner_account_id=owner_account_id,
+                            owner_user_id=owner_user_id,
+                            target_account_id=account_id,
+                            target_user_id=user_id,
+                        )
                     )
-                )
                 queued_task_ids.add(task_id)
 
     async def _is_deleting(self, account_id: str, user_id: str | None = None) -> bool:
-        return await self._manager.get_deletion(account_id, user_id) is not None
+        deletion = await self._manager_dispatcher.run(
+            lambda: self._manager.get_deletion(account_id, user_id)
+        )
+        return deletion is not None
+
+    async def _creation_blocked(self, account_id: str, user_id: str) -> bool:
+        """Reject missing registered identities, also after their deletion fence is gone."""
+        if account_id == SYSTEM_TASK_ACCOUNT_ID:
+            return False
+        if await self._is_deleting(account_id, user_id):
+            return True
+        user = await self._manager.get_user(account_id, user_id)
+        return user is None
 
     async def delete(
         self,
@@ -261,15 +281,16 @@ class DeletionService:
             metadata = extract_task_metadata(message)
             if metadata is not None and metadata.task_id == task_id:
                 return
-        await queue.enqueue(
-            _deletion_message(
-                task_id=task_id,
-                owner_account_id=owner_account_id,
-                owner_user_id=owner_user_id,
-                target_account_id=target_account_id,
-                target_user_id=target_user_id,
+        with bind_task_context(task_id, owner_account_id, owner_user_id):
+            await queue.enqueue(
+                _deletion_message(
+                    task_id=task_id,
+                    owner_account_id=owner_account_id,
+                    owner_user_id=owner_user_id,
+                    target_account_id=target_account_id,
+                    target_user_id=target_user_id,
+                )
             )
-        )
 
     async def _process(self, message: dict[str, Any]) -> Optional[str]:
         task_id = message["task_id"]
@@ -317,8 +338,19 @@ class DeletionService:
             if scheduler is not None:
                 await run_to_completion(lambda: scheduler.delete_tasks(account_id, user_id))
             await run_to_completion(lambda: self._cancel_tasks(account_id, user_id))
-            if user_id is not None:
-                await run_to_completion(lambda: tracker.delete_user_tasks(account_id, user_id))
+            if user_id is None:
+                from openviking.ttl.wiring import get_ttl_adapter
+
+                ttl = get_ttl_adapter()
+                if ttl is not None:
+                    await run_to_completion(lambda: ttl.delete_account(account_id))
+            await run_to_completion(
+                lambda: tracker.delete_tasks(
+                    account_id,
+                    user_id,
+                    allow_active_types={"user_delete"} if user_id is None else (),
+                )
+            )
 
             vectors = self._service.viking_fs.vector_store
             if vectors is not None:
@@ -381,7 +413,6 @@ class DeletionService:
             await agfs.stat(path)
         except Exception as exc:
             if is_not_found_error(exc):
-                get_task_tracker().forget_account_tasks(account_id)
                 return
             raise
         raise RuntimeError("Account directory still exists after deletion")
@@ -410,9 +441,16 @@ class DeletionService:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("Timed out waiting for tasks to stop")
-            await tracker.wait(
-                task.task_id, account_id=task.account_id, user_id=task.user_id, timeout=remaining
-            )
+            try:
+                await tracker.wait(
+                    task.task_id,
+                    account_id=task.account_id,
+                    user_id=task.user_id,
+                    timeout=remaining,
+                )
+            except KeyError:
+                # A Task created concurrently with this deletion withdraws itself.
+                continue
 
     async def _delete_uploads(self, ctx: RequestContext) -> None:
         viking_fs = self._service.viking_fs
@@ -503,6 +541,7 @@ async def setup_deletion(
     oauth_store: Any = None,
     usage_audit_runtime: Any = None,
     gateway_app: Any = None,
+    require_registered_identity: bool = True,
 ) -> Optional[DeletionService]:
     """Create the deletion service after storage and authentication are ready."""
     if manager is None or service.viking_fs is None or service._queue_manager is None:
@@ -514,6 +553,7 @@ async def setup_deletion(
         oauth_store=oauth_store,
         usage_audit_runtime=usage_audit_runtime,
         gateway_app=gateway_app,
+        require_registered_identity=require_registered_identity,
     )
     await deletion_service.initialize()
     return deletion_service

@@ -16,6 +16,17 @@ hermes
 Accept the dependency prompt during installation. In setup, choose how you
 use Hermes, then choose a connection.
 
+Version 2.2 uses OpenViking's MCP tools. Custom and hosted servers need
+OpenViking 0.4.23 or newer and `/mcp` access. Hermes v0.22.5 includes the
+required read-only approval support. MCP launch-time profile binding is also
+required; see [the host change](https://github.com/NousResearch/hermes-agent/issues/138512).
+Until that change ships, use a Hermes build that includes it. A host without
+binding cannot start the adapter.
+
+Setup saves a portable MCP entry. Restart Hermes after setup or a plugin update.
+The adapter rejects old saved-path launch commands. An adapter process started
+before the update must be replaced with `/reload-mcp` or a restart.
+
 ### Personal or Shared
 
 Hermes uses conversation history to follow the current chat. OpenViking saves
@@ -62,6 +73,11 @@ switching sessions.
 The plugin sends conversation turns, tool results and edits to `MEMORY.md`
 and `USER.md` to your OpenViking server. Memory extraction can use a remote model.
 
+Explicit tools use the server's schemas and results. New connections request
+approval for tools that can change data. Read-only tools run without approval.
+Automatic recall, capture and commits use the memory provider lifecycle.
+See [MCP configuration](CONFIGURATION.md#mcp-tools) for filters and trust policy.
+
 ## Quick Local
 
 Quick Local reuses your Hermes language model for memory extraction. A local
@@ -84,12 +100,11 @@ Each Hermes profile has its own server, data and port. If the saved port is
 occupied, Quick Local selects a free port. Run setup again after changing the
 Hermes model or API key. Your data and downloaded model are kept.
 
-**Known issue:** OpenViking 0.4.22 and 0.4.23 can crash when local embedding
-calls overlap, such as during indexing and recall. This affects Quick Local
-and Custom servers using that local backend. It does not affect connections
-using remote embedding APIs. The [fix](https://github.com/volcengine/OpenViking/pull/5548)
-is included in OpenViking 0.5.0. Quick Local currently uses the 0.4 series.
-To use the fixed backend, choose Custom with an OpenViking 0.5.0 server.
+Quick Local installs the latest compatible OpenViking 0.5 release. Version
+0.5.0 includes the [fix](https://github.com/volcengine/OpenViking/pull/5548)
+for overlapping local embedding calls that could crash 0.4.22 and 0.4.23.
+Run Quick Local setup again to upgrade an existing private runtime. This
+does not upgrade a separately managed Custom or OpenViking Service server.
 
 The server keeps running after Hermes exits. These commands are optional:
 
@@ -122,8 +137,6 @@ openviking-server
 
 Then run `hermes memory setup openviking` and choose Custom. For setup to
 start a stopped local server, `openviking-server` must be on `PATH`.
-On OpenViking 0.5.0 in API key mode, use a user or admin API key for memory.
-Root keys are for administration.
 
 ## Check status
 
@@ -146,9 +159,17 @@ data are kept. Updates use the version reviewed in the Hermes catalog.
 For direct source installs, use the [source update command](CONFIGURATION.md#pinned-source-installation).
 
 To update a Quick Local server, run `hermes memory setup openviking` again and
-choose Quick Local. Setup selects the latest compatible OpenViking 0.4 release
+choose Quick Local. Setup selects the latest compatible OpenViking 0.5 release
 and restarts the server if needed. Normal chat and recovery use the installed
 server without checking for updates.
+
+If validation fails after installing a runtime update, chat keeps using the healthy
+existing server while it keeps running. If that process stops, recovery can start
+the installed runtime before setup validation has passed. The update still needs
+validation, even if the server is ready. `hermes openviking local status` reports
+this pending state. Correct the reported problem and run
+`hermes memory setup openviking` again, then choose Quick Local. Setup validates
+the update before requesting a restart.
 
 ## Existing users
 
@@ -163,37 +184,16 @@ plugin's changes become available when that copy is removed.
 
 ## Tools
 
-Setup connects Hermes to the OpenViking server's standard MCP tools. All server
-tools are available unless you have configured a filter. Hermes calls them when
-needed. You do not need to run them yourself.
+Hermes calls these tools when needed. You do not need to run them yourself.
 
 | Tool | What it does |
 |------|--------------|
-| `find` | Search memories and knowledge without changing data. |
-| `read` | Read content at a `viking://` address. |
-| `list`, `tree` | Browse files and directories. |
-| `remember` | Extract memories from supplied messages. |
-| `write`, `edit` | Create or change files. |
-| `forget` | Delete a file or directory, including recursive deletion. |
-| `add_resource`, `add_skill` | Import knowledge or skills. |
-
-New setups use `trust: untrusted`. Read-only tools such as `find` and `read`
-run without approval. Hermes asks before other tools, including `search`,
-`write` and `forget`. Unattended runs cannot approve those calls. Automatic
-recall, capture and commits continue without these prompts.
-Existing trust settings and tool filters are kept. See [MCP tools](CONFIGURATION.md#mcp-tools)
-for configuration and recovery.
-
-When upgrading from the old `viking_*` tools, run `hermes memory setup openviking`
-once and restart Hermes or the gateway. For local files, follow the upload
-instructions returned by `add_resource` or `add_skill`.
-
-After cloning or importing a profile, the memory provider repairs a copied MCP
-profile path and shows a warning once. Run `/reload-mcp` or restart Hermes before
-using OpenViking tools. An MCP connection started before the repair can still use
-the source profile's credentials until it restarts. Automatic memory uses the
-current profile. The repair requires the OpenViking memory provider to load.
-For a gateway, check its startup log and restart the gateway before using tools.
+| `viking_search` | Search memories and knowledge. |
+| `viking_read` | Read content at a `viking://` address. |
+| `viking_browse` | List files and directories. |
+| `viking_remember` | Submit a fact for memory extraction. |
+| `viking_forget` | Delete one exact memory file. |
+| `viking_add_resource` | Add a URL or document to the knowledge base. |
 
 ## Remove
 
@@ -210,12 +210,11 @@ in `$HERMES_HOME/openviking/`.
 
 ## Requirements
 
-- Hermes v0.21.6 or newer.
 - Python 3.11 or newer in the Hermes environment.
 - OpenViking Service, Quick Local or a reachable OpenViking server.
-- OpenViking 0.4.23 or newer with its `/mcp` endpoint for Custom connections.
+- OpenViking 0.2.14 or newer for Custom connections.
 
-Tested with Hermes v0.21.6 at the release commit used in
+Tested with Hermes v2026.9.24 and the Hermes main commit used in
 [CI](../../.github/workflows/hermes-plugin-tests.yml).
 
 ## Config

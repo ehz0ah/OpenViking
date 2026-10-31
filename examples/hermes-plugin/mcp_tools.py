@@ -13,9 +13,10 @@ import os
 import ssl
 import sys
 from builtins import BaseExceptionGroup
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 
 SERVER_NAME = "openviking"
+_BOUND_ARGS = ["openviking", "mcp", "--profile-bound"]
 _ENV_KEYS = tuple(
     f"OPENVIKING_{key}"
     for key in (
@@ -130,8 +131,10 @@ def configure(config: dict, hermes_home: str) -> None:
     env.update({key: "${" + key + "}" for key in _ENV_KEYS})
     for key in _TRANSPORT_ENV_KEYS:
         env.setdefault(key, "${" + key + "}")
-    env["HERMES_HOME"] = str(Path(hermes_home).resolve())
-    entry.update(command="hermes", args=["openviking", "mcp"], env=env)
+    # The host resolves the owning profile at spawn. A saved path survives
+    # clone/import and can select the original profile's credentials.
+    env.pop("HERMES_HOME", None)
+    entry.update(command="hermes", args=list(_BOUND_ARGS), env=env)
     if isinstance(entry.get("headers"), dict):
         entry["headers"] = {
             k: v for k, v in entry["headers"].items() if k.lower() not in _CONNECTION_HEADERS
@@ -147,7 +150,7 @@ def configure(config: dict, hermes_home: str) -> None:
 
 
 def repair_profile_home(hermes_home: str | Path) -> str | None:
-    """Repair a copied adapter path, without changing policy or a running child."""
+    """Migrate our saved launch entry; reload/restart must replace an old child."""
     from hermes_cli.config import _CONFIG_LOCK, read_user_config_raw, save_config
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
@@ -162,24 +165,26 @@ def repair_profile_home(hermes_home: str | Path) -> str | None:
             entry = servers.get(SERVER_NAME) if isinstance(servers, dict) else None
             if not isinstance(entry, dict) or "url" in entry or not entry.get("command"):
                 return None
-            if entry.get("args") != ["openviking", "mcp"]:
+            args = entry.get("args")
+            if args not in (["openviking", "mcp"], _BOUND_ARGS):
                 return None  # a manually configured server, not our adapter
             env = entry.get("env")
             previous = env.get("HERMES_HOME") if isinstance(env, dict) else None
-            if not isinstance(previous, str) or not (
-                PurePosixPath(previous).is_absolute() or PureWindowsPath(previous).is_absolute()
-            ):
+            if args == _BOUND_ARGS and (not isinstance(env, dict) or "HERMES_HOME" not in env):
                 return None
-            if Path(previous).is_absolute() and Path(previous).resolve() == home:
-                return None
-            # Merge only this leaf. Raw ${VAR} references, trust, filters and
-            # unrelated settings must survive without expanding secrets.
-            save_config({"mcp_servers": {SERVER_NAME: {"env": {"HERMES_HOME": str(home)}}}},
-                        merge_existing=True)
+            entry["args"] = list(_BOUND_ARGS)
+            if isinstance(env, dict):
+                env.pop("HERMES_HOME", None)
+            # Write the locked raw config so deleting the leaf is preserved.
+            # A deep merge would restore the old HERMES_HOME value.
+            save_config(config)
             saved = read_user_config_raw()
-            if saved.get("mcp_servers", {}).get(SERVER_NAME, {}).get("env", {}).get("HERMES_HOME") != str(home):
-                raise PermissionError("MCP profile home was not saved")
-            return previous
+            saved_entry = saved.get("mcp_servers", {}).get(SERVER_NAME, {})
+            if saved_entry.get("args") != _BOUND_ARGS or "HERMES_HOME" in (
+                saved_entry.get("env") or {}
+            ):
+                raise PermissionError("MCP profile binding was not saved")
+            return previous or "legacy MCP launch"
     finally:
         reset_hermes_home_override(token)
 
@@ -246,13 +251,15 @@ class Connection:
                         # A different local service can occupy the saved port while
                         # the provider moves Quick Local. Only discovery waits;
                         # tool calls never retry or dispatch with failed auth.
-                        starting = (managed and isinstance(error, _UnverifiedServerError)) or (
-                            isinstance(error, httpx2.ConnectError) and not _tls_error(exc)
-                        ) or (
-                            isinstance(error, self.ov._OpenVikingHTTPError)
-                            and (
-                                error.status_code == 503
-                                or (managed and error.status_code in {401, 403})
+                        starting = (
+                            (managed and isinstance(error, _UnverifiedServerError))
+                            or (isinstance(error, httpx2.ConnectError) and not _tls_error(exc))
+                            or (
+                                isinstance(error, self.ov._OpenVikingHTTPError)
+                                and (
+                                    error.status_code == 503
+                                    or (managed and error.status_code in {401, 403})
+                                )
                             )
                         )
                         if not starting:
@@ -297,7 +304,9 @@ async def _request(ov, values, entry, method, params, *, managed=False):
         ) as http,
     ):
         headers = {**extra, **rest._headers()}
-        response = await http.get(values["endpoint"] + "/health", headers={"Accept": "application/json"})
+        response = await http.get(
+            values["endpoint"] + "/health", headers={"Accept": "application/json"}
+        )
         if 300 <= response.status_code < 400:
             raise _UnverifiedServerError()
         try:
@@ -312,8 +321,10 @@ async def _request(ov, values, entry, method, params, *, managed=False):
             # challenge. An ordinary redirect never authorizes credentials.
             if not values["api_key"] or exc.status_code not in {401, 403}:
                 raise
-            response = await http.get(values["endpoint"] + "/health",
-                                      headers={**extra, **rest._headers(include_tenant=False)})
+            response = await http.get(
+                values["endpoint"] + "/health",
+                headers={**extra, **rest._headers(include_tenant=False)},
+            )
             health = rest._parse_response(response)
         if not ov._is_modern_openviking_health(health):
             raise _UnverifiedServerError()
@@ -403,12 +414,27 @@ async def serve(home: Path, provider_module=None):
         await server.run(read, write, server.create_initialization_options())
 
 
-def run(_args):
-    from hermes_constants import get_hermes_home
+def run(args):
+    # Old copied entries must stop before any profile or credential reads.
+    if not getattr(args, "profile_bound", False):
+        print(
+            "OpenViking MCP requires a profile-bound launch. Run hermes memory setup openviking, "
+            "then /reload-mcp or restart Hermes.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    raw_home = os.environ.get("HERMES_HOME", "").strip()
+    if not raw_home or not Path(raw_home).is_absolute():
+        print(
+            "Hermes did not supply the MCP profile home. Update Hermes to a version with "
+            "MCP launch-time profile binding, then restart.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
     # Hermes preserves unresolved optional env references in stdio config.
     # Treat those as absent, never as an API key or a path.
     for key in (*_ENV_KEYS, *_TRANSPORT_ENV_KEYS):
         if os.environ.get(key) == "${" + key + "}":
             os.environ.pop(key)
-    asyncio.run(serve(Path(get_hermes_home())))
+    asyncio.run(serve(Path(raw_home).resolve()))

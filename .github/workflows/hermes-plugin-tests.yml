@@ -36,8 +36,8 @@ jobs:
       - name: Check out the reviewed Hermes test host
         uses: actions/checkout@v6
         with:
-          repository: NousResearch/hermes-agent
-          ref: 818c13be1dc4fd28987e1e881a9408224afd4535
+          repository: ehz0ah/hermes-agent
+          ref: 837617717c045f70c0a68121d11295534b9f9a33
           path: .ci/hermes-agent
           persist-credentials: false
 
@@ -51,20 +51,12 @@ jobs:
           enable-cache: true
           cache-dependency-glob: |
             .ci/hermes-agent/uv.lock
-            examples/hermes-plugin/pyproject.toml
+            .ci/hermes-agent/pm/lock.json
 
-      - name: Install the host and plugin test dependencies
+      - name: Build the reviewed host test environment
         working-directory: .ci/hermes-agent
         run: |
-          uv sync --frozen --group dev --no-install-project
-          uv export --frozen --group dev --no-emit-project --no-hashes \
-            --output-file "$RUNNER_TEMP/hermes-plugin-constraints.txt"
-          # Keep plugin dependencies within the reviewed host pins. PyYAML
-          # is used by the test fixtures; its version matches Hermes's lock.
-          uv pip install --python .venv/bin/python \
-            --constraint "$RUNNER_TEMP/hermes-plugin-constraints.txt" \
-            --requirement "$GITHUB_WORKSPACE/examples/hermes-plugin/pyproject.toml" \
-            'PyYAML==6.0.3'
+          python -m pm.build_env --source . --out .venv --group dev --group test
 
       - name: Run the external memory provider tests
         working-directory: .ci/hermes-agent
@@ -97,6 +89,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, windows-2025]
+        host: [main]
+        include:
+          - os: ubuntu-24.04
+            host: release
+            python: '3.14'
+            hermes_repo: NousResearch/hermes-agent
+            hermes_ref: v0.22.5
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     defaults:
@@ -109,47 +108,68 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v6
         with:
-          repository: NousResearch/hermes-agent
-          ref: 818c13be1dc4fd28987e1e881a9408224afd4535
+          repository: ${{ matrix.hermes_repo || 'ehz0ah/hermes-agent' }}
+          ref: ${{ matrix.hermes_ref || '837617717c045f70c0a68121d11295534b9f9a33' }}
           path: .ci/hermes-agent
           persist-credentials: false
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.14'
+          python-version: ${{ matrix.python || '3.14' }}
       - uses: astral-sh/setup-uv@v7
         with:
           version: '0.12.3'
           enable-cache: true
           cache-dependency-glob: |
             .ci/hermes-agent/uv.lock
+            .ci/hermes-agent/pm/lock.json
             examples/hermes-plugin/local_packages.py
       - name: Install the reviewed host and test dependencies
         run: |
-          uv sync --frozen --group dev --no-install-project
-          PYTHON=$(uv run --no-sync python -c 'import sys; print(sys.executable)')
-          uv export --frozen --group dev --no-emit-project --no-hashes \
-            --output-file "$RUNNER_TEMP/hermes-plugin-constraints.txt"
-          uv pip install --python "$PYTHON" \
-            --constraint "$RUNNER_TEMP/hermes-plugin-constraints.txt" \
-            --requirement "$GITHUB_WORKSPACE/examples/hermes-plugin/pyproject.toml" \
-            PyYAML==6.0.3
+          python -m pm.build_env --source . --out .venv --group dev --group test
+          if [ -x .venv/Scripts/python.exe ]; then
+            PYTHON="$PWD/.venv/Scripts/python.exe"
+          else
+            PYTHON="$PWD/.venv/bin/python"
+          fi
+          echo "HERMES_PYTHON=$PYTHON" >> "$GITHUB_ENV"
       - name: Check process ownership and installer failures
+        env:
+          HERMES_TEST_FILE_RETRIES: '0'
+          HERMES_TEST_WORKERS: '2'
         run: |
-          uv run --no-sync python -m pytest \
+          scripts/run_tests.sh \
             "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_local_lifecycle.py" \
             "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_quick_local.py" \
             "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_quick_local_routes.py" \
             "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_quick_local_preflight.py" \
+            "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_mcp_profile_binding.py" \
             --confcutdir="$GITHUB_WORKSPACE/examples/hermes-plugin/tests" -p no:cacheprovider -q
+      - name: Run the complete provider suite on the release host
+        if: matrix.host == 'release'
+        env:
+          HERMES_TEST_FILE_RETRIES: '0'
+          HERMES_TEST_WORKERS: '2'
+        run: |
+          scripts/run_tests.sh "$GITHUB_WORKSPACE/examples/hermes-plugin/tests" \
+            --confcutdir="$GITHUB_WORKSPACE/examples/hermes-plugin/tests" -p no:cacheprovider -q
+      - name: Check real plugin installation on Windows
+        if: ${{ !cancelled() && runner.os == 'Windows' && env.HERMES_PYTHON != '' }}
+        run: |
+          "$HERMES_PYTHON" "$GITHUB_WORKSPACE/scripts/check-hermes-plugin-install.py" \
+            --hermes-root "$PWD" \
+            --output-dir "$RUNNER_TEMP/hermes-plugin-install" \
+            --install-only
       - name: Install and run real Quick Local services
         run: |
-          uv run --no-sync python "$GITHUB_WORKSPACE/scripts/check-hermes-quick-local.py" \
+          "$HERMES_PYTHON" "$GITHUB_WORKSPACE/scripts/check-hermes-quick-local.py" \
             --hermes-root "$PWD" --output-dir "$RUNNER_TEMP/quick-local"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: quick-local-${{ matrix.os }}
+          name: quick-local-${{ matrix.os }}-${{ matrix.host }}
           path: |
             ${{ runner.temp }}/quick-local/evidence.json
             ${{ runner.temp }}/quick-local/*/logs/openviking-server.log
+            ${{ runner.temp }}/hermes-plugin-install/*.log
+            ${{ runner.temp }}/hermes-plugin-install/evidence.json
           if-no-files-found: ignore

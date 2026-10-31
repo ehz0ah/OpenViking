@@ -141,6 +141,39 @@ map can never assert tenant identity, and the plugin's own headers (authenticati
 tenant, actor) take precedence over the map. The client snapshots the map when it
 is built, so the headers also cover the startup `/health` probe.
 
+The identity probe stays anonymous first, so no credential is ever sent to an unknown
+host. Gateways that answer that anonymous request by *redirecting* to their own login
+page are handled like `401`/`403`, but only on a connection that carries gateway headers
+(`extra_headers` / `OPENVIKING_EXTRA_HEADERS`): those headers are what declare that an
+authenticating gateway sits in front of the endpoint. Cloudflare Access returns `302` with
+`Location: https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<host>`, and such a
+connection's probe is retried once with **only those gateway headers** — no API key, no
+peer identity, since a gateway never asks for them, and no API key is required for that
+retry either, because none is sent. If the gateway then lets the probe through to a server
+that asks for credentials itself, that `401`/`403` is answered by the ordinary key retry
+(bounded: two retries at most). Without that retry a protected server looks "reachable but
+not OpenViking", the client is dropped, and memory stays unavailable even though every
+authenticated request would have worked. A redirect that survives the gateway retry reports
+the gateway and points at `extra_headers` instead of "not valid OpenViking", and the login
+URL is never followed.
+
+A `401`/`403` is the endpoint asking for credentials, and the status alone does not say
+which kind. An OpenViking server wants the API key; a gateway that answers `401`/`403`
+instead of redirecting (oauth2-proxy, many WAFs) wants its own headers. So the probe tries
+the key when one is configured, and the gateway headers when they are configured. A
+gateway-only deployment has no key to try, so it gets the gateway retry — gating that retry
+on a key it never sends is what kept such a deployment from starting at all. With both
+configured the key is tried first, as before, and the gateway headers are not retried a
+second time.
+
+A redirect on a connection with *no* gateway headers is not retried: a `3xx` from an
+endpoint that has not been shown to be OpenViking is not authorization to resend the API
+key, so it keeps failing exactly as it did before, and no credential leaves the process.
+Every probe request sets `follow_redirects=False`, so the login URL is never fetched even
+when a `Location` is present. A `3xx` answered to a retry is never read as a payload
+either — a redirect whose body happens to look like `/health` is reported as a redirect,
+not as a healthy server.
+
 ### Optional peer identity
 
 New connections use the OpenViking user's memory directory by default. Setup
@@ -228,8 +261,8 @@ Setup saves `mcp_servers.openviking` in the active Hermes profile. Restart
 Hermes to load the server tools as `mcp__openviking__<tool>`. Tool names,
 arguments and results come from the server. All tools are exposed by default.
 
-A new connection uses `trust: untrusted`. Hermes v0.21.6 includes the read-only
-annotation and CLI approval fixes needed by this policy. Read-only tools such
+A new connection uses `trust: untrusted`. Hermes v0.22.5 includes the read-only
+annotation support needed by this policy. Read-only tools such
 as `find`, `read` and `grep` do not ask for approval. `search`, `remember`,
 `write` and `forget` require approval. Unattended runs such as `-q` and cron
 cannot approve them. Automatic recall, capture and commits are separate and
@@ -254,6 +287,19 @@ The adapter uses the same profile credentials as automatic memory and follows
 linked `ovcli.conf` changes and Quick Local port recovery. It passes configured
 CA and proxy settings to the connection. It does not manage the server process
 or retry tool calls.
+
+The saved command is `hermes openviking mcp --profile-bound`. It does not save
+an absolute `env.HERMES_HOME`. Hermes must supply the owning profile home when
+it starts the child, including for routed gateway and desktop profiles. This
+requires the [launch-time host binding change](https://github.com/NousResearch/hermes-agent/issues/138512).
+A host without this change fails before the adapter reads profile credentials
+or sends a request.
+
+Provider initialization migrates known legacy adapter entries while preserving
+trust, filters and other settings. The updated adapter refuses the legacy
+command. After an update, use `/reload-mcp` or restart Hermes to replace any
+process that still runs the previous plugin code. Repairing saved configuration
+cannot change an existing process.
 
 Discovery waits up to `connect_timeout` (60 seconds by default) for the server.
 Tools may be unavailable on the first turn while discovery runs. After a longer
@@ -284,6 +330,12 @@ OpenViking in order. The active profile records each copied entry's exact URI in
 | `add` | Create a file under user memory or the configured peer, then record its URI |
 | `replace` | Match the committed event's full previous content and target, update the same URI, and wait for semantic/vector refresh |
 | `remove` | Match the committed event's full previous content and target, delete that exact URI, and wait for semantic cleanup |
+
+Hermes v0.22 and later expose `patch` instead of `replace` in the native
+`memory` tool. After a successful patch, Hermes sends the provider a `replace`
+event containing the complete updated entry and its full previous content.
+Older Hermes releases expose `replace` directly. Both paths update the same
+mapped OpenViking URI.
 
 Replacing a mapped entry recreates its file if it was deleted directly in
 OpenViking, for example with the MCP `forget` tool.
@@ -399,3 +451,39 @@ hermes plugins install 'volcengine/OpenViking/examples/hermes-plugin' \
 
 Connection settings and server data are retained. Restart Hermes or the gateway
 after updating.
+
+## Recovery lock files
+
+On platforms with POSIX advisory locks, each initialized provider creates an
+empty `openviking/runs/<run_id>.lock` file under the active Hermes profile's
+`HERMES_HOME`. This includes providers initialized for cron contexts. The file
+is a coordination point, not a pending-session marker; its existence does not
+mean the provider is still running. The open descriptor's advisory lock records
+live ownership.
+
+Shutdown and recovery release the advisory lock and close the descriptor but
+retain the file. A recovery process may already have opened that inode, so
+deleting the pathname, even while holding its lock, can let a later process
+create and lock a different inode for the same owner. Failed acquisitions must
+also leave another holder's file intact.
+
+Online deletion is unsafe under the current locking protocol. It is not
+impossible in principle: safe online cleanup would need a coordination protocol
+that also covers processes opening or waiting for a lock, with concurrency tests
+for that protocol. Such a protocol change is outside this focused fix.
+
+There is deliberately no online garbage collector. Each new run leaves one
+empty file, so file count, inode use and directory metadata grow with the number
+of runs even though the files contain no conversation data. This trades ongoing
+filesystem metadata use for stable lock identity; frequent short-lived or cron
+runs make that cost more visible. The legacy recovery lock uses one shared file
+in the same directory.
+
+For offline housekeeping, stop every Hermes process using that profile,
+including gateways, cron jobs and recovery workers, and prevent new ones from
+starting before removing obsolete `.lock` files from `openviking/runs/`. Do not
+delete the directory or files under `openviking/pending_sessions/`: those markers
+are needed for recovery. Once all old descriptors are closed, a future recovery
+can safely recreate the lock files it needs. File age or an apparently unlocked
+file alone is not sufficient evidence that online deletion is safe under the
+current protocol.

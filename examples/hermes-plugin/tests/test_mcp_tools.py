@@ -1,5 +1,6 @@
 """Exercise profile routing and the actual MCP wire protocol over loopback HTTP."""
 
+import argparse
 import asyncio
 import copy
 import importlib
@@ -14,8 +15,15 @@ import pytest
 
 
 @contextmanager
-def mcp_server(*, trusted=False, status_code=200, call_delay=0,
-               health_status=200, health_payload=None, health_auth=False):
+def mcp_server(
+    *,
+    trusted=False,
+    status_code=200,
+    call_delay=0,
+    health_status=200,
+    health_payload=None,
+    health_auth=False,
+):
     requests = []
     entered, release = threading.Event(), threading.Event()
     release.set()
@@ -58,8 +66,12 @@ def mcp_server(*, trusted=False, status_code=200, call_delay=0,
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
-                return self.respond(health_payload if health_payload is not None else
-                                    {"status": "ok", "healthy": True, "version": "0.4.23"}, health_status)
+                return self.respond(
+                    health_payload
+                    if health_payload is not None
+                    else {"status": "ok", "healthy": True, "version": "0.4.23"},
+                    health_status,
+                )
             if self.path != "/api/v1/system/status":
                 return self.respond(status=405)
             entered.set()
@@ -173,8 +185,8 @@ def test_setup_preserves_policy_and_never_copies_keys(external_provider, enabled
     original = copy.deepcopy(config)
     mcp.configure(config, str(home))
     new = config["mcp_servers"]["openviking"]
-    assert new["command"] == "hermes" and new["args"] == ["openviking", "mcp"]
-    assert new["env"]["HERMES_HOME"] == str(home.resolve())
+    assert new["command"] == "hermes" and new["args"] == ["openviking", "mcp", "--profile-bound"]
+    assert "HERMES_HOME" not in new["env"]
     assert "old-secret" not in json.dumps(config) and "url" not in new
     assert new["headers"] == {"X-Custom": "${CUSTOM_SECRET}"}
     for key in ("enabled", "timeout", "tools", "ssl_verify", "trust"):
@@ -219,7 +231,8 @@ def test_transport_environment_survives_hermes_stdio_filter(external_provider, m
 
 
 def test_unset_transport_references_are_removed_before_sdk_start(external_provider, monkeypatch):
-    _, _, module, _ = external_provider("mcp-unset-env")
+    home, _, module, _ = external_provider("mcp-unset-env")
+    monkeypatch.setenv("HERMES_HOME", str(home))
     mcp = importlib.import_module(module.__name__ + ".mcp_tools")
     for key in (*mcp._ENV_KEYS, *mcp._TRANSPORT_ENV_KEYS):
         monkeypatch.setenv(key, "${" + key + "}")
@@ -228,7 +241,7 @@ def test_unset_transport_references_are_removed_before_sdk_start(external_provid
         assert all(key not in mcp.os.environ for key in (*mcp._ENV_KEYS, *mcp._TRANSPORT_ENV_KEYS))
 
     monkeypatch.setattr(mcp, "serve", serve)
-    mcp.run(None)
+    mcp.run(argparse.Namespace(profile_bound=True))
 
 
 @pytest.mark.parametrize("trusted", [False, True])
@@ -300,7 +313,11 @@ def test_connection_snapshot_survives_reload_and_next_call_uses_new_connection(e
             asyncio.run(connection.request("tools/list", None))
             a_calls = [h for _, h, body in a[1] if body and body.get("method") == "tools/call"]
             assert a_calls[0]["Authorization"] == "Bearer key-alice"
-            assert all(h.get("Authorization") == "Bearer key-bob" for path, h, _ in b[1] if path != "/health")
+            assert all(
+                h.get("Authorization") == "Bearer key-bob"
+                for path, h, _ in b[1]
+                if path != "/health"
+            )
         finally:
             a[4].set()
             worker.join(10)
@@ -331,11 +348,20 @@ def test_failed_identity_probe_never_dispatches_or_retries_a_write(external_prov
         assert "rejected" not in hint and "key-alice" not in hint
 
 
-@pytest.mark.parametrize("health_status, health_payload", [(302, None), (200, {}), (200, {"status": "ok", "healthy": False, "version": "0.4.23"})])
-def test_unverified_endpoint_never_receives_mcp_credentials(external_provider, health_status, health_payload):
+@pytest.mark.parametrize(
+    "health_status, health_payload",
+    [(302, None), (200, {}), (200, {"status": "ok", "healthy": False, "version": "0.4.23"})],
+)
+def test_unverified_endpoint_never_receives_mcp_credentials(
+    external_provider, health_status, health_payload
+):
     home, _, module, _ = external_provider("mcp-unverified-endpoint")
     mcp = importlib.import_module(module.__name__ + ".mcp_tools")
-    with mcp_server(health_status=health_status, health_payload=health_payload) as (endpoint, requests, *_):
+    with mcp_server(health_status=health_status, health_payload=health_payload) as (
+        endpoint,
+        requests,
+        *_,
+    ):
         configure_home(home, endpoint)
         with (home / ".env").open("a") as env:
             env.write('OPENVIKING_EXTRA_HEADERS={"CF-Access-Client-Secret":"synthetic-secret"}\n')
@@ -343,7 +369,16 @@ def test_unverified_endpoint_never_receives_mcp_credentials(external_provider, h
             asyncio.run(mcp.Connection(home, module).request("tools/list", None))
         assert "did not identify itself as OpenViking" in mcp._error_hint(caught.value)
         assert len(requests) == 1 and requests[0][0] == "/health"
-        assert all(k not in requests[0][1] for k in ["X-API-Key", "Authorization", "CF-Access-Client-Secret", "X-Custom", "X-OpenViking-Actor-Peer"])
+        assert all(
+            k not in requests[0][1]
+            for k in [
+                "X-API-Key",
+                "Authorization",
+                "CF-Access-Client-Secret",
+                "X-Custom",
+                "X-OpenViking-Actor-Peer",
+            ]
+        )
 
 
 def test_authenticated_health_challenge_keeps_existing_hosted_server_support(external_provider):
@@ -487,7 +522,10 @@ def test_gateway_headers_reach_discovery_and_setup_validation(external_provider,
     mcp = importlib.import_module(module.__name__ + ".mcp_tools")
     with mcp_server() as (endpoint, requests, *_):
         configure_home(home, endpoint, linked=linked)
-        extra = {"CF-Access-Client-Id": "synthetic-id", "CF-Access-Client-Secret": "synthetic-secret"}
+        extra = {
+            "CF-Access-Client-Id": "synthetic-id",
+            "CF-Access-Client-Secret": "synthetic-secret",
+        }
         if linked:
             path = home / "ovcli.conf"
             config = json.loads(path.read_text())
@@ -500,16 +538,25 @@ def test_gateway_headers_reach_discovery_and_setup_validation(external_provider,
         assert asyncio.run(connection.request("tools/list", None)).tools
         values, _, _ = connection.resolve()
         assert mcp.validate_connection(module, values) == (True, "")
-        assert all(all(headers.get(k) == v for k, v in extra.items()) for path, headers, _ in requests if path != "/health")
+        assert all(
+            all(headers.get(k) == v for k, v in extra.items())
+            for path, headers, _ in requests
+            if path != "/health"
+        )
         assert all(k not in requests[0][1] for k in extra)
 
 
 @pytest.mark.parametrize("managed", [False, True])
 @pytest.mark.parametrize("unverified", [False, True])
-def test_discovery_waits_for_managed_port_recovery_only(external_provider, monkeypatch, managed, unverified):
+def test_discovery_waits_for_managed_port_recovery_only(
+    external_provider, monkeypatch, managed, unverified
+):
     home, _, module, _ = external_provider("mcp-discovery-recovery")
     mcp = importlib.import_module(module.__name__ + ".mcp_tools")
-    with mcp_server(status_code=401, health_payload={} if unverified else None) as foreign, mcp_server() as owned:
+    with (
+        mcp_server(status_code=401, health_payload={} if unverified else None) as foreign,
+        mcp_server() as owned,
+    ):
         configure_home(home, foreign[0])
         connection = mcp.Connection(home, module)
         resolve = connection.resolve
@@ -533,7 +580,9 @@ def test_discovery_waits_for_managed_port_recovery_only(external_provider, monke
         if managed:
             assert asyncio.run(recover()).tools[0].name == "forget"
         else:
-            with pytest.raises(mcp._UnverifiedServerError if unverified else module._OpenVikingHTTPError):
+            with pytest.raises(
+                mcp._UnverifiedServerError if unverified else module._OpenVikingHTTPError
+            ):
                 asyncio.run(recover())
         assert not any(body for _, _, body in foreign[1])
         if unverified:
@@ -544,18 +593,41 @@ def test_discovery_waits_for_managed_port_recovery_only(external_provider, monke
 def test_managed_auth_challenge_waits_without_sending_credentials(external_provider, health_status):
     home, _, module, _ = external_provider("mcp-managed-auth-recovery")
     mcp = importlib.import_module(module.__name__ + ".mcp_tools")
-    foreign_health = {"status": "ok", "healthy": True, "version": "0.4.23",
-                      "auth_mode": "trusted", "root_api_key_required": True}
-    with mcp_server(health_status=health_status, health_payload=foreign_health) as foreign, mcp_server() as owned:
+    foreign_health = {
+        "status": "ok",
+        "healthy": True,
+        "version": "0.4.23",
+        "auth_mode": "trusted",
+        "root_api_key_required": True,
+    }
+    with (
+        mcp_server(health_status=health_status, health_payload=foreign_health) as foreign,
+        mcp_server() as owned,
+    ):
         paths = module.quick_local.managed_paths(home)
         paths.root.mkdir()
         key = "synthetic-managed-root-key"
-        (home / "config.yaml").write_text(json.dumps({
-            "memory": {"provider": "openviking", "openviking": {"deployment": module.quick_local.DEPLOYMENT}},
-            "mcp_servers": {"openviking": {"connect_timeout": 5, "headers": {"X-Gateway-Secret": "gateway-key"}}},
-        }))
-        paths.server_config.write_text(json.dumps({"storage": {"workspace": str(paths.workspace)},
-                                                  "server": {"root_api_key": key}}))
+        (home / "config.yaml").write_text(
+            json.dumps(
+                {
+                    "memory": {
+                        "provider": "openviking",
+                        "openviking": {"deployment": module.quick_local.DEPLOYMENT},
+                    },
+                    "mcp_servers": {
+                        "openviking": {
+                            "connect_timeout": 5,
+                            "headers": {"X-Gateway-Secret": "gateway-key"},
+                        }
+                    },
+                }
+            )
+        )
+        paths.server_config.write_text(
+            json.dumps(
+                {"storage": {"workspace": str(paths.workspace)}, "server": {"root_api_key": key}}
+            )
+        )
         profile = {"url": foreign[0], "root_api_key": key}
         paths.ovcli_config.write_text(json.dumps(profile))
         connection = mcp.Connection(home, module)
@@ -581,23 +653,52 @@ def test_managed_auth_challenge_waits_without_sending_credentials(external_provi
 
 
 @pytest.mark.parametrize("health_status", [401, 403])
-def test_managed_provider_checks_ownership_before_auth_probe(external_provider, monkeypatch, health_status):
+def test_managed_provider_checks_ownership_before_auth_probe(
+    external_provider, monkeypatch, health_status
+):
     home, provider, module, _ = external_provider("mcp-managed-provider-auth")
-    foreign_health = {"status": "ok", "healthy": True, "version": "0.4.23",
-                      "auth_mode": "trusted", "root_api_key_required": True}
-    with mcp_server(health_status=health_status, health_payload=foreign_health) as (endpoint, requests, *_):
+    foreign_health = {
+        "status": "ok",
+        "healthy": True,
+        "version": "0.4.23",
+        "auth_mode": "trusted",
+        "root_api_key_required": True,
+    }
+    with mcp_server(health_status=health_status, health_payload=foreign_health) as (
+        endpoint,
+        requests,
+        *_,
+    ):
         paths = module.quick_local.managed_paths(home)
         paths.root.mkdir()
         key = "synthetic-managed-root-key"
-        (home / "config.yaml").write_text(json.dumps({"memory": {"provider": "openviking", "openviking": {
-            "deployment": module.quick_local.DEPLOYMENT,
-        }}}))
-        paths.server_config.write_text(json.dumps({"storage": {"workspace": str(paths.workspace)},
-                                                  "server": {"root_api_key": key}}))
+        (home / "config.yaml").write_text(
+            json.dumps(
+                {
+                    "memory": {
+                        "provider": "openviking",
+                        "openviking": {
+                            "deployment": module.quick_local.DEPLOYMENT,
+                        },
+                    }
+                }
+            )
+        )
+        paths.server_config.write_text(
+            json.dumps(
+                {"storage": {"workspace": str(paths.workspace)}, "server": {"root_api_key": key}}
+            )
+        )
         paths.ovcli_config.write_text(json.dumps({"url": endpoint, "root_api_key": key}))
         recovery = []
-        monkeypatch.setattr(provider, "_handle_runtime_openviking_unreachable", lambda **_kwargs: recovery.append(True))
-        provider.initialize("auth-port-recovery", hermes_home=str(home), platform="cli", agent_context="cron")
+        monkeypatch.setattr(
+            provider,
+            "_handle_runtime_openviking_unreachable",
+            lambda **_kwargs: recovery.append(True),
+        )
+        provider.initialize(
+            "auth-port-recovery", hermes_home=str(home), platform="cli", agent_context="cron"
+        )
         assert recovery and provider._client is None
         assert requests
         assert all("Authorization" not in h and "X-API-Key" not in h for _, h, _ in requests)
@@ -749,7 +850,7 @@ def test_migration_notice_is_visible_once_without_writing_to_stdout(
 
 
 def test_configured_but_disabled_mcp_needs_no_migration_notice(external_provider, capsys):
-    import yaml
+    from hermes_cli.config import yaml
 
     home, provider, _, _ = external_provider("mcp-disabled-notice")
     provider._hermes_home = str(home)
@@ -779,15 +880,21 @@ def test_relocated_profile_repairs_only_adapter_home_and_warns_once(
     mcp = importlib.import_module(source_module.__name__ + ".mcp_tools")
     config = {
         "memory": {"provider": "openviking", "openviking": {"use_ovcli_config": False}},
-        "mcp_servers": {"openviking": {
-            "trust": "full", "enabled": False,
-            "tools": {"include": ["read"], "exclude": ["forget"]},
-            "headers": {"X-Gateway": "${GATEWAY_SECRET}"},
-            "env": {"SSL_CERT_FILE": "${PRIVATE_CA}"},
-        }, "other": {"command": "other-server"}},
+        "mcp_servers": {
+            "openviking": {
+                "trust": "full",
+                "enabled": False,
+                "tools": {"include": ["read"], "exclude": ["forget"]},
+                "headers": {"X-Gateway": "${GATEWAY_SECRET}"},
+                "env": {"SSL_CERT_FILE": "${PRIVATE_CA}"},
+            },
+            "other": {"command": "other-server"},
+        },
         "model": {"default": "unchanged", "api_key": "${MODEL_SECRET}"},
     }
     mcp.configure(config, str(source))
+    config["mcp_servers"]["openviking"]["args"] = ["openviking", "mcp"]
+    config["mcp_servers"]["openviking"]["env"]["HERMES_HOME"] = str(source)
     (source / "config.yaml").write_text(json.dumps(config))
     destination = source.parent / relocation
     shutil.copytree(source, destination)
@@ -800,13 +907,18 @@ def test_relocated_profile_repairs_only_adapter_home_and_warns_once(
     # Simulate a routed destination while the caller remains bound to another home.
     token = set_hermes_home_override(source)
     try:
-        provider.initialize("relocated", hermes_home=str(home), platform="cli", agent_context="cron", **kwargs)
+        provider.initialize(
+            "relocated", hermes_home=str(home), platform="cli", agent_context="cron", **kwargs
+        )
         repaired = read_user_config_raw(home / "config.yaml")
         expected = copy.deepcopy(config)
-        expected["mcp_servers"]["openviking"]["env"]["HERMES_HOME"] = str(home.resolve())
+        expected["mcp_servers"]["openviking"]["env"].pop("HERMES_HOME")
+        expected["mcp_servers"]["openviking"]["args"] = ["openviking", "mcp", "--profile-bound"]
         assert repaired == expected
         before = (home / "config.yaml").read_bytes()
-        provider.initialize("relocated-again", hermes_home=str(home), platform="cli", agent_context="cron", **kwargs)
+        provider.initialize(
+            "relocated-again", hermes_home=str(home), platform="cli", agent_context="cron", **kwargs
+        )
         assert (home / "config.yaml").read_bytes() == before
         assert get_hermes_home() == source
     finally:
@@ -821,13 +933,16 @@ def test_relocated_profile_repairs_only_adapter_home_and_warns_once(
         assert output.err == ""
 
 
-@pytest.mark.parametrize("entry", [
-    None,
-    {"url": "https://example.test/mcp", "env": {"HERMES_HOME": "/old/profile"}},
-    {"command": "other", "args": ["serve"], "env": {"HERMES_HOME": "/old/profile"}},
-    {"command": "hermes", "args": ["openviking", "mcp"], "env": {}},
-    {"command": "hermes", "args": ["openviking", "mcp"], "env": {"HERMES_HOME": "${HERMES_HOME}"}},
-])
+@pytest.mark.parametrize(
+    "entry",
+    [
+        None,
+        {"url": "https://example.test/mcp", "env": {"HERMES_HOME": "/old/profile"}},
+        {"command": "other", "args": ["serve"], "env": {"HERMES_HOME": "/old/profile"}},
+        {"command": "hermes", "args": ["openviking", "mcp", "--profile-bound"], "env": {}},
+        {"command": "hermes", "args": ["custom", "mcp"], "env": {"HERMES_HOME": "${HERMES_HOME}"}},
+    ],
+)
 def test_profile_repair_leaves_other_mcp_config_unchanged(external_provider, entry):
     home, _, module, _ = external_provider("mcp-repair-noop")
     mcp = importlib.import_module(module.__name__ + ".mcp_tools")
@@ -856,7 +971,9 @@ def test_failed_profile_repair_warns_once_without_stopping_memory(
     home, provider, module, _ = external_provider("mcp-repair-failure")
     mcp = importlib.import_module(module.__name__ + ".mcp_tools")
     config = {}
-    mcp.configure(config, str(home.parent / "old"))
+    mcp.configure(config, str(home))
+    config["mcp_servers"]["openviking"]["args"] = ["openviking", "mcp"]
+    config["mcp_servers"]["openviking"]["env"]["HERMES_HOME"] = str(home.parent / "old")
     (home / "config.yaml").write_text(json.dumps(config))
     before = (home / "config.yaml").read_bytes()
     from hermes_cli import config as host_config
@@ -877,11 +994,14 @@ def test_failed_profile_repair_warns_once_without_stopping_memory(
     assert "private diagnostic" not in output.err
 
 
-@pytest.mark.parametrize("previous", [
-    r"C:\Users\source\.hermes\profiles\work",
-    r"\\old-host\share\profiles\work",
-    "/old-machine/.hermes/profiles/work",
-])
+@pytest.mark.parametrize(
+    "previous",
+    [
+        r"C:\Users\source\.hermes\profiles\work",
+        r"\\old-host\share\profiles\work",
+        "/old-machine/.hermes/profiles/work",
+    ],
+)
 def test_profile_repair_recognizes_foreign_absolute_paths(external_provider, previous):
     from hermes_cli.config import read_user_config_raw
 
@@ -892,4 +1012,7 @@ def test_profile_repair_recognizes_foreign_absolute_paths(external_provider, pre
     config["mcp_servers"]["openviking"]["env"]["HERMES_HOME"] = previous
     (home / "config.yaml").write_text(json.dumps(config))
     assert mcp.repair_profile_home(home) == previous
-    assert read_user_config_raw(home / "config.yaml")["mcp_servers"]["openviking"]["env"]["HERMES_HOME"] == str(home.resolve())
+    assert (
+        "HERMES_HOME"
+        not in read_user_config_raw(home / "config.yaml")["mcp_servers"]["openviking"]["env"]
+    )

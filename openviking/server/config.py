@@ -30,6 +30,7 @@ from openviking_cli.utils.config.consts import (
     OPENVIKING_CONFIG_ENV,
     SYSTEM_CONFIG_DIR,
 )
+from openviking_cli.utils.config.ttl_config import TTLConfig
 
 logger = get_logger(__name__)
 
@@ -141,6 +142,7 @@ class UserConfig(BaseModel):
 
     add_targets: AddTargetsConfig = Field(default_factory=AddTargetsConfig)
     memory_policy: Optional[Dict[str, Any]] = None
+    ttl: Optional[TTLConfig] = None
     agent_evolution: DeprecatedUserAgentEvolutionConfig = Field(
         default_factory=DeprecatedUserAgentEvolutionConfig,
         exclude=True,
@@ -164,9 +166,16 @@ class UserConfigDefaults(UserConfig):
     @field_validator("auto_commit_policy", mode="before")
     @classmethod
     def validate_auto_commit_policy(cls, value: Any) -> Optional[Dict[str, Any]]:
-        from openviking.session.auto_commit_policy import AutoCommitPolicy
+        from openviking.session.auto_commit_policy import (
+            AutoCommitPolicy,
+            validate_idle_timeout_input,
+        )
 
-        return None if value is None else AutoCommitPolicy.from_dict(value).to_dict()
+        if value is None:
+            return None
+        if isinstance(value, dict) and "idle_timeout_seconds" in value:
+            validate_idle_timeout_input(value["idle_timeout_seconds"])
+        return AutoCommitPolicy.from_dict(value).to_dict()
 
 
 class MetricsAccountDimensionConfig(BaseModel):
@@ -253,6 +262,22 @@ class UsageReporterConfig(BaseModel):
     enabled: bool = False
     extractors: List[Literal["memory_usage"]] = Field(default_factory=lambda: ["memory_usage"])
     sinks: List[UsageReporterSinkConfig] = Field(default_factory=list)
+
+
+class TTLAdapterConfig(BaseModel):
+    """Opt-in Redis-backed directory TTL configuration.
+
+    Uses the built-in implementation, supplied with its ResourceID, Redis
+    connection and writer/reader role through ``config``. No external Python
+    package is required. Unset or disabled leaves all TTL hooks inactive.
+    """
+
+    enabled: bool = False
+    config: Dict[str, object] = Field(default_factory=dict)
+
+    @property
+    def writer_enabled(self) -> bool:
+        return self.enabled and bool(self.config.get("writer", True))
 
 
 class TraceDumpBodyConfig(BaseModel):
@@ -364,6 +389,8 @@ class ServerConfig(BaseModel):
     trusted_identity_pending_max_size: int = Field(10_000, gt=0)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     usage_reporter: UsageReporterConfig = Field(default_factory=UsageReporterConfig)
+    # Built-in Redis TTL; disabled unless explicitly configured.
+    ttl_adapter: Optional[TTLAdapterConfig] = None
     # Public-facing base URL emitted in MCP-issued upload instructions. See
     # ``openviking.server.mcp_endpoint._resolve_public_base_url`` for the full
     # resolution chain: env var > this field > X-Forwarded-Host/Proto > Host header

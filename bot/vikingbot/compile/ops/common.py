@@ -11,7 +11,7 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 from openviking.core.namespace import relative_uri_path
-from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, classify_api_error
+from openviking.models.model_error import ModelErrorKind, model_error_kind
 from vikingbot.compile import file_ops
 from vikingbot.compile.hashing import content_hash, digest
 from vikingbot.compile.pipeline_io import MAX_JOB_ATTEMPTS
@@ -48,9 +48,16 @@ Cover every input. Preserve source paths and applicability in content where rele
 async def payload(runtime: Pipeline, record: Record, *, combine=False) -> dict:
     """Load assigned evidence; Combine receives content and identity, without runtime metadata.
 
-    Ready drafts retain their supporting facts and scope because the body alone may
-    omit relationships. Missing stored evidence fails the assignment.
+    Image metadata is registered only after its snapshot write succeeds; load its
+    body on viewing. Ready drafts retain their supporting facts and scope because
+    the body alone may omit relationships. Missing other payloads fail the assignment.
     """
+    data = runtime.evidence.get(record.record_id, {})
+    if data.get("media_kind") == "image":
+        return {
+            "id": record.record_id,
+            "payload": {**data, "source_ranges": [record.record_id]},
+        }
     data = await runtime.files.get(record.payload_ref)
     if data is None:
         raise ValueError(f"Missing evidence/payload: {record.payload_ref}")
@@ -347,7 +354,7 @@ async def job(runtime: Pipeline, name, inputs, work):
             except OSError as exc:
                 if (
                     attempt == MAX_JOB_ATTEMPTS - 1
-                    or classify_api_error(exc) == ERROR_CLASS_INPUT_TOO_LARGE
+                    or model_error_kind(exc) is ModelErrorKind.INPUT_TOO_LARGE
                 ):
                     raise
                 runtime.metrics["job_retries"] += 1

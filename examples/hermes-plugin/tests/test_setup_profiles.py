@@ -5,7 +5,7 @@ import importlib
 from types import SimpleNamespace
 
 import pytest
-import yaml
+from hermes_cli.config import yaml
 
 
 def patch_menu(monkeypatch, select):
@@ -106,8 +106,8 @@ def test_setup_persists_preset_and_real_gateway_session_boundaries(
     assert (other_home / "config.yaml").read_bytes() == other_before
     saved = yaml.safe_load((home / "config.yaml").read_text())
     settings = saved["memory"]["openviking"]
-    assert saved["mcp_servers"]["openviking"]["args"] == ["openviking", "mcp"]
-    assert saved["mcp_servers"]["openviking"]["env"]["HERMES_HOME"] == str(home)
+    assert saved["mcp_servers"]["openviking"]["args"] == ["openviking", "mcp", "--profile-bound"]
+    assert "HERMES_HOME" not in saved["mcp_servers"]["openviking"]["env"]
     assert "OpenViking MCP tools configured. Restart Hermes to load them." in output
     assert saved["mcp_servers"]["openviking"]["trust"] == "untrusted"
     assert ("Read-only OpenViking tools run without approval. Other tools need approval.") in output
