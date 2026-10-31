@@ -56,6 +56,8 @@ jobs:
       - name: Build the reviewed host test environment
         working-directory: .ci/hermes-agent
         run: |
+          python scripts/write_install_stamp.py --output install-stamp.json \
+            --base-version 0.22.5 --source ci --update-mechanism self
           python -m pm.build_env --source . --out .venv --group dev --group test
 
       - name: Run the external memory provider tests
@@ -125,6 +127,8 @@ jobs:
             examples/hermes-plugin/local_packages.py
       - name: Install the reviewed host and test dependencies
         run: |
+          python scripts/write_install_stamp.py --output install-stamp.json \
+            --base-version 0.22.5 --source ci --update-mechanism self
           python -m pm.build_env --source . --out .venv --group dev --group test
           if [ -x .venv/Scripts/python.exe ]; then
             PYTHON="$PWD/.venv/Scripts/python.exe"

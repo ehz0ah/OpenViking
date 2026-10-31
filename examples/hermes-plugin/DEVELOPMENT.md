@@ -182,7 +182,7 @@ mutations. Do not substitute a guessed match in tests or production.
 From that checkout, run its canonical test runner against this directory:
 
 ```bash
-PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}" HERMES_TEST_FILE_RETRIES=0 \
+HERMES_TEST_FILE_RETRIES=0 \
   scripts/run_tests.sh /path/to/OpenViking/examples/hermes-plugin/tests \
   --confcutdir=/path/to/OpenViking/examples/hermes-plugin/tests -q
 ```
