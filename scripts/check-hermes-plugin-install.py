@@ -103,6 +103,7 @@ def check(host, repository, root, timeout, *, install_only=False):
             "plugin.yaml",
             "pyproject.toml",
         ):
+            # Git may convert LF to CRLF on Windows; compare content, not checkout line endings.
             if (installed / name).read_text(encoding="utf-8") != (
                 repository / "examples/hermes-plugin" / name
             ).read_text(encoding="utf-8"):
